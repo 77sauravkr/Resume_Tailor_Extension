@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Resume</title>
+  <link rel="stylesheet" href="resume-viewer.css">
+</head>
+<body>
+  <header class="top no-print">
+    <div class="brand">
+      <span class="logo"></span>
+      <div>
+        <div id="title" class="title">Resume</div>
+        <div id="sub" class="sub"></div>
+      </div>
+    </div>
+    <button id="btn-pdf" class="primary">Download PDF</button>
+  </header>
+
+  <main class="stage">
+    <div id="resume-container" class="resume-paper" contenteditable="true" spellcheck="false"></div>
+  </main>
+  <p class="hint no-print">Click any text to edit it before downloading.</p>
+
+  <script src="overleaf-renderer.js"></script>
+  <script src="resume-viewer.js"></script>
+</body>
+</html>

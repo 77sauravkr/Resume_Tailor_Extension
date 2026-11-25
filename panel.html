@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auto Job Resume Tailor</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="logo"></span>Auto Job Resume Tailor</div>
+    <button id="btn-settings" class="icon" title="Settings">⚙</button>
+  </header>
+
+  <div id="setup-banner" class="banner" hidden>
+    <b>Set up your profile</b>
+    <span>Upload your resume once and everything is filled in for you.</span>
+    <button id="btn-setup" class="solid small">Import resume</button>
+  </div>
+
+  <!-- Job -->
+  <section class="card">
+    <div class="job-top">
+      <div class="avatar" id="job-avatar">?</div>
+      <div class="job-meta">
+        <div class="company" id="job-host">No page</div>
+        <button class="linkish" id="btn-rescan">Re-scan page</button>
+      </div>
+    </div>
+    <div class="two">
+      <label>Job title<input id="in-role" type="text" placeholder="Detecting…"></label>
+      <label>Company<input id="in-company" type="text" placeholder="Detecting…"></label>
+    </div>
+    <label>Job description <span class="muted" id="jd-count"></span>
+      <textarea id="in-jd" rows="3" placeholder="Job description (auto-detected, or paste it here)"></textarea></label>
+  </section>
+
+  <!-- ATS -->
+  <section class="card" id="ats-card">
+    <div class="scores">
+      <div class="score"><small>Your resume</small><b id="score-before">--</b></div>
+      <span class="arrow" id="score-arrow" hidden>→</span>
+      <div class="score" id="after-box" hidden><small id="after-label">After tailoring</small><b id="score-after" class="good">--</b></div>
+    </div>
+    <div class="muted center-note" id="score-src"></div>
+    <div id="kw-empty" class="muted">Open a job posting to see how your resume matches.</div>
+    <div id="kw-wrap" hidden>
+      <div class="group">Matched keywords <span id="matched-n"></span></div>
+      <div class="chips" id="matched-chips"></div>
+      <div class="group gap">Gap keywords <span class="muted">added to the tailored resume · tap to exclude</span></div>
+      <div class="chips" id="gap-chips"></div>
+    </div>
+    <div class="muted" id="fix-note" style="margin-top:8px"></div>
+    <div class="keyhint" id="key-hint" hidden>No AI key: only Skills and Summary can be updated. <button class="linkish" id="btn-addkey">Add a free key</button> so bullets and projects are reworded too.</div>
+    <div class="mode" id="mode-box">
+      <label><input type="radio" name="mode" value="safe" checked> <b>Safe</b> · only skills your resume backs up (easier interview)</label>
+      <label><input type="radio" name="mode" value="all"> <b>All</b> · add every JD skill (higher ATS, you must know them)</label>
+    </div>
+    <div class="muted" id="mode-note"></div>
+    <button id="btn-tailor" class="tailor">Tailor Resume</button>
+    <div class="result" id="tailor-result" hidden></div>
+  </section>
+
+  <!-- Autofill -->
+  <button id="btn-autofill" class="primary">Autofill</button>
+  <div class="caption" id="autofill-caption">Fills this page from your saved information</div>
+
+  <section class="card" id="completion" hidden>
+    <button class="completion-head" id="completion-toggle">
+      <span>Completion</span><b id="completion-pct">0%</b><span class="chev down">›</span>
+    </button>
+    <div class="bar"><i id="completion-bar"></i></div>
+    <div id="completion-body"></div>
+  </section>
+
+  <button class="row" id="row-info"><span class="ico">▤</span><span>Your Autofill Information</span><span class="chev">›</span></button>
+  <button class="row" id="row-resume"><span class="ico">▤</span><span>Resume</span><span class="muted" id="resume-name">No resume uploaded</span><span class="chev">›</span></button>
+
+  <section class="block">
+    <div class="row flat static"><span class="ico">✉</span><span>Cover Letter</span><span class="muted" id="cover-name">Not generated</span></div>
+    <textarea id="cover-text" rows="9" hidden></textarea>
+    <div class="inline" id="cover-actions" hidden>
+      <button class="ghost small" id="btn-copy-cover">Copy</button>
+    </div>
+    <button class="ghost" id="btn-cover">Generate Cover Letter</button>
+  </section>
+
+  <button class="linkish center" id="btn-another">Autofill for Another Job</button>
+  <div id="status" class="status" role="status"></div>
+
+  <script src="profile-defaults.js"></script>
+  <script src="autofill-data.js"></script>
+  <script src="ai-service.js"></script>
+  <script src="panel.js"></script>
+</body>
+</html>

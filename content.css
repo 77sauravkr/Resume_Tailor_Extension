@@ -1,0 +1,9 @@
+/* content.css - Aegis Job Copilot In-Page Widget & Highlighting */
+
+/* Form Field Highlighting */
+.aegis-field-autofilled {
+  border: 2px solid #10b981 !important;
+  background-color: rgba(16, 185, 129, 0.08) !important;
+  transition: all 0.3s ease !important;
+}
+

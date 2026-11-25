@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your Autofill Information</title>
+  <link rel="stylesheet" href="editor.css">
+</head>
+<body>
+  <div class="shell">
+    <aside id="aside">
+      <h1>Autofill information</h1>
+      <nav id="nav"></nav>
+    </aside>
+    <main>
+      <div id="steps" class="steps" hidden></div>
+      <div id="pane"></div>
+      <footer>
+        <button id="back" class="secondary" hidden>Back</button>
+        <button id="save" class="primary">Save</button>
+        <button id="next" class="primary" hidden>Next</button>
+        <span id="status"></span>
+      </footer>
+    </main>
+  </div>
+  <script src="lib/pdf.min.js"></script>
+  <script src="profile-defaults.js"></script>
+  <script src="autofill-data.js"></script>
+  <script src="resume-import.js"></script>
+  <script src="editor.js"></script>
+</body>
+</html>
