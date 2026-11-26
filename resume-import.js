@@ -278,6 +278,16 @@ const ResumeImport = (() => {
   const TWO_WORD_CITY = /^(New|San|Los|Las|Navi|Greater|St\.?|Fort|Salt|Santa|Hong|Kuala|Abu|Tel)$/i;
 
   // "Acme Corp Pune, MH" -> ["Acme Corp", "Pune, MH"] (location = word before the comma + the rest)
+  // PDF text joins the company and the right-hand location column with a space.
+  function splitCompanyLine(line) {
+    const parts = line.split(",").map(p => p.trim());
+    const words = parts[0].split(/\s+/);
+    const joined = parts.length === 2 && words.length > 1 &&
+      /^(india|usa|us|uk|canada|germany|singapore|australia|uae|[A-Z]{2})$/i.test(parts[1]) &&
+      !/^(inc|ltd|llc|llp|corp|co|pvt|limited|technologies|labs|solutions)\.?$/i.test(words[words.length - 1]);
+    return joined ? splitLocation(line) : [parts[0], parts.slice(1).join(", ")];
+  }
+
   function splitLocation(line) {
     const m = line.match(/^(.*?)\s+([^\s,]+(?:\s[^\s,]+)?),\s*(.+)$/);
     if (!m) return [line.trim(), ""];
@@ -359,8 +369,7 @@ const ResumeImport = (() => {
       if (!r) continue;
       let company = "", location = "", j = i + 1;
       if (expLines[j] && !BULLET_RE.test(expLines[j]) && !rangeOf(expLines[j])) {
-        const parts = expLines[j].split(",").map(p => p.trim());
-        company = parts[0]; location = parts.slice(1).join(", "); j++;
+        [company, location] = splitCompanyLine(expLines[j]); j++;
       }
       let k = j;
       while (k < expLines.length && !(rangeOf(expLines[k]) && !BULLET_RE.test(expLines[k]))) k++;
@@ -425,11 +434,12 @@ const ResumeImport = (() => {
   }
 
   // Returns { profile, mode: "ai" | "basic", warning }
-  async function importFile(file, currentProfile) {
+  async function importFile(file, currentProfile, { keepDocuments = false } = {}) {
     if (file.size > 10 * 1024 * 1024) throw new Error("File is larger than 10 MB.");
     const { text, links } = await readFile(file);
     if (text.trim().length < 40) throw new Error("No readable text found (scanned PDF?). Paste your resume text instead.");
     const result = await importText(text, currentProfile, links);
+    if (keepDocuments) return result;   // re-reading a stored file must not replace or delete anything
     if (typeof AegisDocStore !== "undefined") {
       result.profile.documents.resume = await AegisDocStore.put("resume", file);
       result.profile.documents.masterResume = null;

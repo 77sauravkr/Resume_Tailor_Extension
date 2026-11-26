@@ -19,14 +19,14 @@
     R("portfolio", /portfolio|website|personal[\s_-]*(site|url|web)|\bblog\b|other[\s_-]*(url|link)/),
     R("postalCode", /\bzip|postal|pin[\s_-]*code/),
     R("address", /address|street/),
-    R("city", /\bcity\b|\btown\b|current[\s_-]*location|\blocation\b/),
+    R("city", /\bcity\b|\btown\b|current[\s_-]*location|\blocation\b/, /sponsor|\bvisa\b|authori[sz]/),
     R("state", /\bstate\b|province|\bregion\b/),
     R("county", /\bcounty\b|\bdistrict\b/),
     R("country", /country|nationality/),
     R("currentlyWork", /currently[\s_-]*work|presently[\s_-]*work|i still work here|current[\s_-]*role\b.*check/),
     R("currentlyStudy", /currently[\s_-]*(study|enrolled|attend)|still[\s_-]*enrolled/),
     R("currentCompany", /current[\s_-]*(company|employer|organi[sz]ation)|present[\s_-]*employer|\bcompany[\s_-]*name\b|\bemployer\b|\bcompany\b/, /reference|emergency/),
-    R("currentTitle", /current[\s_-]*(title|role|position|designation)|job[\s_-]*title|designation|\brole[\s_-]*title\b|\btitle\b/, /project|page|section|degree|mr|mrs|ms|salutation|courtesy|document|file/),
+    R("currentTitle", /current[\s_-]*(title|role|position|designation)|job[\s_-]*title|designation|\brole[\s_-]*title\b|\btitle\b/, /project|page|section|degree|\bmr\b|\bmrs\b|\bms\b|salutation|courtesy|document|\bfile\b/),
     R("jobType", /employment[\s_-]*type|job[\s_-]*type|work[\s_-]*type/),
     R("workDescription", /responsibilities|role[\s_-]*description|job[\s_-]*description|work[\s_-]*description|summary[\s_-]*of[\s_-]*duties/),
     R("school", /school|university|college|institution/),
@@ -183,9 +183,26 @@
     return { label: label || el.name || el.id || "Field", sig, required };
   }
 
-  function match(sig) {
-    for (const r of RULES) if (r.re.test(sig) && !(r.not && r.not.test(sig))) return r.key;
-    return null;
+  const BROAD_KEYS = new Set(["currentCompany", "currentTitle", "skills"]);
+  const EXPLICIT_CURRENT = {
+    currentCompany: /(current|present)[\s_-]*(company|employer|organi[sz]ation)/,
+    currentTitle: /(current|present)[\s_-]*(title|role|position|designation)|job[\s_-]*title/
+  };
+  const isOpenQuestion = label => {
+    const l = String(label || "").trim().toLowerCase();
+    return /\?|\b(describe|explain|tell us)\b/.test(l) || /^(why|how|what)\b/.test(l) || l.split(/\s+/).length >= 8;
+  };
+
+  function match(sig, label = "") {
+    const hit = skip => RULES.find(r => !skip?.has(r.key) && r.re.test(sig) && !(r.not && r.not.test(sig)))?.key || null;
+    const yesNo = /^(are|is|do|does|did|have|has|will|would|can|could|were|was)\b/i.test(String(label).trim());
+    if (!yesNo && !isOpenQuestion(label)) return hit();
+    // A question: prefer any specific rule; use company/title only when it plainly asks for the current one.
+    const other = hit(BROAD_KEYS);
+    if (other) return other;
+    const l = label.toLowerCase();
+    if (yesNo || /^(why|how|describe|explain|tell)\b/.test(l)) return null;
+    return Object.keys(EXPLICIT_CURRENT).find(k => EXPLICIT_CURRENT[k].test(l)) || null;
   }
 
   // ---------- Multiple Work / Education Entry Indexing ----------
@@ -421,7 +438,7 @@
     }
     return queryAllDeep(
       document,
-      "[role='listbox'] [role='option'], [role='option'], [data-automation-id='promptOption'], [class*='select__option'], [class*='menu'] li"
+      "[role='listbox'] [role='option'], [role='option'], [data-automation-id='promptOption'], [class*='select__option']"
     ).filter(visible);
   }
 
@@ -471,25 +488,21 @@
     return true;
   }
 
+  // Agreements and attestations are the applicant's decision.
+  const CONSENT_RE = /\b(agree|consent|certify|acknowledge|attest|declare|confirm|terms|privacy)\b/i;
+
   function fillCheckbox(el, key, value) {
-    if (typeof value === "boolean") {
-      if (el.checked !== value) el.click();
-      return true;
-    }
-    const v = String(value || "").trim().toLowerCase();
-    if (v === "yes" || v === "true") {
-      if (!el.checked) el.click();
-      return true;
-    }
-    if (v === "no" || v === "false") {
-      if (el.checked) el.click();
-      return true;
-    }
     const lbl = clean(labelFor(el)).toLowerCase();
-    if (v && lbl && lbl.includes(v)) {
-      if (!el.checked) el.click();
-      return true;
-    }
+    if (CONSENT_RE.test(lbl)) return el.checked;
+    const set = on => { if (el.checked !== on) el.click(); return true; };
+    if (typeof value === "boolean") return set(value);
+    const v = String(value || "").trim().toLowerCase();
+    // A box labelled just "Yes" or "No" is one option of a pair: tick only the matching one.
+    if (lbl === "yes" || lbl === "no") return set(lbl === v);
+    if (v === "yes" || v === "true") return set(true);
+    if (v === "no" || v === "false") return set(false);
+    const esc = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (v && new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`).test(lbl)) return set(true);
     return el.checked;
   }
 
@@ -525,8 +538,12 @@
     return !/^(total|overall|work|relevant|professional|industry|software|practical|prior|full|hands)$/.test(word);
   }
 
+  // Identity, banking and birth-date fields must come from the user, never from AI.
+  const SENSITIVE_RE = /\bssn\b|social\s*security|aa?dhaa?r|\bpan\b(?!\s*india)|passport|national\s*(id|insurance)|date\s*of\s*birth|\bdob\b|birth|\bbank|account\s*(number|no\b)|\bifsc\b|\biban\b|routing\s*number|licen[cs]e|\btax\s*(id|number)|voter\s*id/;
+  const isSensitive = sig => SENSITIVE_RE.test(String(sig).toLowerCase().replace(/[_-]+/g, " "));
+
   function canAskAiForField(el, type, d, key, opts) {
-    if (!opts.answer || el.value) return false;
+    if (!opts.answer || el.value || isSensitive(d.sig)) return false;
     if (isSpecificYearsQuestion(d.sig, key)) return true;
     if (key) return false;
     const isTextarea = el.tagName === "TEXTAREA";
@@ -544,6 +561,8 @@
     const rawFields = queryAllDeep(document, "input, select, textarea, [role='combobox'], button[aria-haspopup='listbox']")
       .filter(el => {
         if (el.closest("#aegis-autofill-panel") || el.disabled) return false;
+        // Widgets such as React-Select keep an invisible "required" input; writing to it fakes a filled field.
+        if (el.type !== "file" && el.getAttribute("aria-hidden") === "true") return false;
         if (el.readOnly && !isCustomDropdown(el)) return false;
         return true;
       });
@@ -587,7 +606,7 @@
 
       const d = describe(el);
       const ctx = getCtx(el, d.sig);
-      const key = type === "email" ? "email" : type === "tel" ? "phone" : type === "password" ? "password" : match(d.sig);
+      const key = type === "email" ? "email" : type === "tel" ? "phone" : type === "password" ? "password" : match(d.sig, d.label);
 
       if (type === "checkbox") {
         const val = resolveFieldValue(key, el, ctx, profile, baseValues);
@@ -634,7 +653,7 @@
       const legend = first.closest("fieldset")?.querySelector("legend");
       const question = clean(textOf(legend)) || groupQuestion(first);
       const sig = `${question} ${first.name}`.toLowerCase();
-      const key = match(sig);
+      const key = match(sig, question);
       const already = group.some(r => r.checked);
       const filled = key && baseValues[key] ? fillRadio(group, key, baseValues[key]) : already;
       items.push({

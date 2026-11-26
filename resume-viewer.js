@@ -7,6 +7,43 @@ let tailoredRecord = null;
 let useTailored = false;
 let diffVisible = false;
 let saveTimer = null;
+let renderedKeys = new Set();  // what the last render put on screen, used to detect deletions
+
+// One key per removable element: "summary", "experience:0", "experience:0:2", "skills:1", ...
+function domKeys(page) {
+  const keys = new Set();
+  if (page.querySelector('[data-field="summary"]')) keys.add("summary");
+  for (const type of ["experience", "project", "education"]) {
+    page.querySelectorAll(`.entry[data-entry-type="${type}"][data-idx]`).forEach(entry => {
+      const key = `${type === "project" ? "projects" : type}:${entry.dataset.idx}`;
+      keys.add(key);
+      entry.querySelectorAll(".entry-bullets li[data-bidx]").forEach(li => keys.add(`${key}:${li.dataset.bidx}`));
+    });
+  }
+  page.querySelectorAll(".skills-list li[data-idx]").forEach(li => keys.add(`skills:${li.dataset.idx}`));
+  page.querySelectorAll(".achievements-list li[data-idx]").forEach(li => keys.add(`achievements:${li.dataset.idx}`));
+  return keys;
+}
+
+// Copy of the resume without what the user deleted on screen. `resume` itself keeps its indices
+// so they still match the DOM, and undo brings a line back.
+function currentData() {
+  const data = JSON.parse(JSON.stringify(resume));
+  const page = document.querySelector("#resume-container .page");
+  if (!page) return data;
+  const now = domKeys(page);
+  const gone = new Set([...renderedKeys].filter(k => !now.has(k)));
+  if (gone.has("summary")) data.summary = "";
+  for (const list of ["experience", "projects", "education", "skills", "achievements"]) {
+    if (!Array.isArray(data[list])) continue;
+    data[list] = data[list].filter((item, i) => {
+      if (gone.has(`${list}:${i}`)) return false;
+      if (Array.isArray(item?.bullets)) item.bullets = item.bullets.filter((_, b) => !gone.has(`${list}:${i}:${b}`));
+      return true;
+    });
+  }
+  return data;
+}
 
 function fileTitle(name, company) {
   const first = (name || "").trim().split(/\s+/)[0] || "Resume";
@@ -137,11 +174,12 @@ function syncDomToResume() {
 async function saveEdits() {
   syncDomToResume();
   if (useTailored && tailoredRecord) {
-    tailoredRecord.data = resume;
+    tailoredRecord.data = currentData();
     tailoredRecord.editedAt = Date.now();
     await chrome.storage.local.set({ latestTailoredResume: tailoredRecord });
   } else {
-    await chrome.storage.local.set({ masterGenericResume: resume, candidateProfile: resume });
+    const data = currentData();
+    await chrome.storage.local.set({ masterGenericResume: data, candidateProfile: data });
   }
   setSaveStatus("Edits saved");
   if (diffVisible) renderDiffPanel();
@@ -306,6 +344,7 @@ function render() {
     document.head.appendChild(style);
   }
   container.innerHTML = buildOverleafResumeHTML(resume, { bodyOnly: true });
+  renderedKeys = domKeys(container.querySelector(".page"));
   const fit = () => fitResumePage(container.querySelector(".page"));
   fit();
   if (document.fonts?.ready) document.fonts.ready.then(fit);
@@ -365,7 +404,7 @@ document.getElementById("btn-diff").addEventListener("click", () => {
 document.getElementById("btn-copy-tex").addEventListener("click", async () => {
   if (!resume) return;
   syncDomToResume();
-  const tex = buildOverleafLatexCode(resume);
+  const tex = buildOverleafLatexCode(currentData());
   await navigator.clipboard.writeText(tex);
   const btn = document.getElementById("btn-copy-tex");
   const prev = btn.textContent;
@@ -376,7 +415,7 @@ document.getElementById("btn-copy-tex").addEventListener("click", async () => {
 document.getElementById("btn-dl-tex").addEventListener("click", () => {
   if (!resume) return;
   syncDomToResume();
-  const tex = buildOverleafLatexCode(resume);
+  const tex = buildOverleafLatexCode(currentData());
   const blob = new Blob([tex], { type: "application/x-tex;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

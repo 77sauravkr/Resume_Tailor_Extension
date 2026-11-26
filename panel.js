@@ -139,8 +139,11 @@ function setScores(before, projected = null) {
   }
 }
 
+$("btn-ai-scan").onclick = () => runScan(true);
+
 function renderMatch() {
   $("tailor-result").hidden = true;
+  $("btn-ai-scan").hidden = true;
   $("jd-count").textContent = job.text ? `${job.text.length} chars` : "";
   if (AegisAutofillData.isEmpty(profile) || job.text.length < 60) {
     scanSeq++; scan = null;
@@ -153,14 +156,16 @@ function renderMatch() {
   runScan();
 }
 
-// Scans on every panel open / job change: the AI compares the real resume text to this job.
-async function runScan() {
+// Runs on every panel open / job change with a free local keyword match (or a saved AI result).
+// The AI is called only from the "Run AI scan" button, to protect free-tier limits.
+async function runScan(useAi = false) {
+  $("btn-ai-scan").hidden = true;
   const seq = ++scanSeq;
   $("kw-wrap").hidden = true; $("kw-empty").hidden = false;
   $("kw-empty").textContent = "Scanning your resume against this job…";
   $("btn-tailor").disabled = true; $("score-src").textContent = ""; $("fix-note").textContent = "";
   setScores("…");
-  const res = await chrome.runtime.sendMessage({ action: "SCAN_JOB", jobText: job.text }).catch(e => ({ success: false, error: e.message }));
+  const res = await chrome.runtime.sendMessage({ action: "SCAN_JOB", jobText: job.text, useAi }).catch(e => ({ success: false, error: e.message }));
   if (seq !== scanSeq) return;   // a newer scan started
   if (!res?.success || !(res.matched.length + res.gaps.length)) {
     scan = null; setScores("--");
@@ -182,14 +187,15 @@ async function runScan() {
     $("score-src").textContent = "Scored by AI from your resume text";
     $("fix-note").textContent = res.gaps.length ? `${rel} gaps are backed by your resume, ${res.gaps.filter(g => g.status === "quick").length} are quick to learn.` + (miss ? ` ${miss} hard ones are skipped in Safe (tap to force).` : "") : "";
   } else {
-    const failed = res.aiNote && res.aiNote !== "no-key";
+    const failed = res.aiNote && !["no-key", "on-demand"].includes(res.aiNote);
+    $("btn-ai-scan").hidden = res.aiNote === "no-key";
     $("score-src").textContent = "Keyword match only" + (failed ? " (AI scan failed)" : "");
     if (failed) {
       const lines = res.aiNote.split(" | ").map(l => l.replace(/Invalid API Key|API key not valid[^.]*\.?/i, m => m).slice(0, 140));
       $("fix-note").replaceChildren(...lines.flatMap(l => { const d = document.createElement("div"); d.textContent = l; return [d]; }));
       const b = document.createElement("button"); b.className = "linkish"; b.textContent = "Fix keys in Settings"; b.onclick = () => openEditor("settings");
       $("fix-note").append(b);
-    } else $("fix-note").textContent = "Add an AI key in Settings for an AI score.";
+    } else $("fix-note").textContent = res.aiNote === "on-demand" ? "" : "Add an AI key in Settings for an AI score.";
   }
   updateScores();
 }
@@ -201,7 +207,7 @@ function applyMode(res = scan) {
   excluded = new Set(tailorMode() === "all" ? [] : res.gaps.filter(g => g.status === "missing").map(g => g.term));
   document.querySelectorAll("#gap-chips .chip.gap").forEach(c => c.classList.toggle("off", excluded.has(c.dataset.k)));
   const rel = res.gaps.filter(g => g.status === "related").length, quick = res.gaps.filter(g => g.status === "quick").length, miss = res.gaps.length - rel - quick;
-  const src = res.source === "ai" ? "" : " (AI scan unavailable: local check)";
+  const src = res.source === "ai" ? "" : " (local check)";
   $("mode-note").textContent = !res.gaps.length ? "" : tailorMode() === "all"
     ? `All adds all ${res.gaps.length} gaps, including ${miss} hard ones with no evidence.`
     : `Safe adds ${rel} backed + ${quick} quick-to-learn gaps. Skips ${miss} hard ones.${src}`;
@@ -260,8 +266,18 @@ $("completion-body").addEventListener("click", async e => {
 $("completion-toggle").onclick = () => { $("completion-body").hidden = !$("completion-body").hidden; };
 
 async function runAutofillAcrossFrames(tabId, jobContext) {
+  // Never run in ad/tracker iframes: pick the trusted frames first, then run only there.
+  let frameIds;
+  try {
+    const frames = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: () => location.hostname });
+    const topHost = frames.find(f => f.frameId === 0)?.result;
+    frameIds = frames.filter(f => f.frameId === 0 || AegisAutofillData.isTrustedFrame(f.result, topHost)).map(f => f.frameId);
+  } catch (e) {
+    return null;
+  }
+
   const runInFrames = () => chrome.scripting.executeScript({
-    target: { tabId, allFrames: true },
+    target: { tabId, frameIds },
     func: ctx => (typeof window.__aegisRunAutofill === "function" ? window.__aegisRunAutofill(ctx) : { __missing: true }),
     args: [jobContext || ""]
   });
@@ -274,7 +290,8 @@ async function runAutofillAcrossFrames(tabId, jobContext) {
   }
 
   if (results.some(r => r.result?.__missing)) {
-    const ok = await ensureContentScripts(tabId, true);
+    const injected = await Promise.all(frameIds.map(id => ensureContentScripts(tabId, false, id)));
+    const ok = injected.some(Boolean);
     if (!ok) return null;
     results = await runInFrames().catch(() => null);
     if (!results) return null;

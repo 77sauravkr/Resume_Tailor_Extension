@@ -187,5 +187,16 @@
     return (Math.round(months / 12 * 10) / 10).toString();
   }
 
-  root.AegisAutofillData = { emptyProfile, fromParsed, mergeParsed, normalize, toResumeProfile, isEmpty, yearsOfExperience, parseRange };
+  // Profile data may only be typed into the page itself, its own subdomains, or a known application system.
+  const ATS_HOSTS = ["greenhouse.io", "lever.co", "ashbyhq.com", "myworkdayjobs.com", "myworkdaysite.com",
+    "smartrecruiters.com", "workable.com", "icims.com", "jobvite.com", "bamboohr.com", "successfactors.com",
+    "successfactors.eu", "taleo.net", "recruitee.com", "teamtailor.com"];
+  const within = (host, domain) => host === domain || host.endsWith("." + domain);
+
+  function isTrustedFrame(frameHost, topHost) {
+    if (!frameHost || !topHost) return false;
+    return within(frameHost, topHost) || within(topHost, frameHost) || ATS_HOSTS.some(d => within(frameHost, d));
+  }
+
+  root.AegisAutofillData = { isTrustedFrame, emptyProfile, fromParsed, mergeParsed, normalize, toResumeProfile, isEmpty, yearsOfExperience, parseRange };
 })(typeof window !== "undefined" ? window : globalThis);

@@ -134,7 +134,7 @@ class AIService {
   // ---------- 1b. AI scan: what the JD asks for vs what the resume really shows ----------
   // Every claim must quote the resume; quotes that are not in the resume are demoted to "missing".
   // Scores are computed here from counts, never taken from the model.
-  async scanJobFit(jdText, profile) {
+  async scanJobFit(jdText, profile, { useAi = true } = {}) {
     const base = this.analyzeJobFit(jdText, profile);
     // No AI available: still classify gaps locally so "Safe" works. A gap counts as backed ("related") only if it is a
     // practice (not a named tool/language/cloud) AND a bullet/project line of the resume is already about it.
@@ -154,6 +154,7 @@ class AIService {
     };
     const jd = this._condenseJd(jdText, 7000);
     if (!this.hasKey) return keywordResult("no-key");
+    if (!useAi) return keywordResult("on-demand");
     if (jd.length < 60) return keywordResult();
     const have = this._profileText(profile || {});
     const prompt = `You are an ATS screener. Compare ONE resume to ONE job description. Be strict and honest.
@@ -544,17 +545,17 @@ JD: ${this._condenseJd(jobText, 4500)}`;
   async answerScreeningQuestion(question, jobContext, profile, extra = {}) {
     const inputType = extra.inputType || "textarea";
     const styleGuide = inputType === "number"
-      ? "Return ONLY a single non-negative number (integer or decimal, no units or extra words). If unknown or no experience, return 0."
+      ? "Return ONLY a single non-negative number (integer or decimal, no units or extra words) taken from the facts. If the facts do not give it, return the single word UNKNOWN."
       : inputType === "text"
         ? "Give a concise 1-line answer (under 80 characters, plain value or short phrase, no filler)."
         : "Answer in first person, 2-4 sentences, using only facts below.";
-    const prompt = `You are ${profile?.name || "a candidate"} answering an employer's application question. ${styleGuide} If the facts do not support an answer, give a brief honest answer without inventing numbers, years or skills.
+    const prompt = `You are ${profile?.name || "a candidate"} answering an employer's application question. ${styleGuide} ${inputType === "number" ? "Never guess a number." : "If the facts do not support an answer, give a brief honest answer without inventing numbers, years or skills."}
 FACTS: ${JSON.stringify({ summary: profile?.summary, skills: profile?.skills, experience: (profile?.experience || []).map(e => ({ role: e.role, company: e.company, bullets: e.bullets })), ...extra })}
 JOB: ${this._condenseJd(jobContext, 2000)}
 QUESTION: "${question}"
 Return only the answer text.`;
     try {
-      let ans = this._plain(await this._callWithFallback(prompt, { json: false })).replace(/^["']|["']$/g, "");
+      let ans = this._plain(await this._callWithFallback(prompt, { json: false, wait: false })).replace(/^["']|["']$/g, "");
       if (inputType === "number") {
         const m = ans.match(/\d+(?:\.\d+)?/);
         ans = m ? m[0] : "";
@@ -684,7 +685,23 @@ Return only the answer text.`;
         else if ([401, 403].includes(e.status) || e.fatal) await this._setCool(a.key, 10 * 60 * 1000);
       }
     }
+    // Short rate limit: wait for the first key to free up and try once more (not for autofill answers).
+    if (opts.wait !== false && !opts.retried) {
+      const waits = all.map(a => (this._cool[this._keyId(a.key)] || 0) - Date.now()).filter(ms => ms > 0 && ms <= 35000);
+      if (waits.length) {
+        await this._sleep(Math.min(...waits) + 500);
+        return this._callWithFallback(prompt, { ...opts, retried: true });
+      }
+    }
     throw new Error(errors.length ? errors.join(" | ") : "No AI key configured. Add a Gemini or Groq key in Settings.");
+  }
+
+  async _sleep(ms) {
+    // Touch an extension API while waiting so the service worker is not shut down.
+    for (let left = ms; left > 0; left -= 10000) {
+      await new Promise(r => setTimeout(r, Math.min(left, 10000)));
+      try { await chrome.storage.local.get("keyCooldown"); } catch (e) {}
+    }
   }
 
   _apiError(name, status, body, retryAfter) {
@@ -765,7 +782,7 @@ Return only the answer text.`;
     if (!refresh && AIService._gemModels && Date.now() - AIService._gemModels.at < 6 * 3600 * 1000) {
       return AIService._gemModels.list;
     }
-    const fallback = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+    const fallback = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
     let list = [];
     if (apiKey) {
       try {
@@ -779,7 +796,6 @@ Return only the answer text.`;
           const rank = id => {
             if (id === "gemini-flash-latest") return 0;
             if (/^gemini-4-hydrogen/i.test(id)) return 1;
-            if (/^gemini-2\.5-flash$/i.test(id)) return 2;
             if (/flash-lite/i.test(id)) return 4;
             if (/flash/i.test(id)) return 3;
             if (/hydrogen|neon/i.test(id)) return 5;
@@ -860,7 +876,7 @@ Return only the answer text.`;
   }
 
   async ping() {
-    const r = await this._callWithFallback('Reply with exactly this JSON and nothing else: {"ok":true}');
+    const r = await this._callWithFallback('Reply with exactly this JSON and nothing else: {"ok":true}', { wait: false });
     return /ok/i.test(r);
   }
 }

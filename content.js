@@ -143,7 +143,8 @@
     }
     // 2. GREENHOUSE
     else if (host.includes("greenhouse.io")) {
-      company = firstText([".company-name", "#header .company-name", "[class*='company']"]);
+      company = firstText([".company-name", "#header .company-name", "[class*='company']"]) ||
+        document.title.match(/^Job Application for .+ at (.+)$/)?.[1]?.trim() || "";
       role = firstText([".app-title", "h1.app-title", "h1"]);
       text = firstLongText(["#content", ".content", "main"]);
     }
@@ -299,7 +300,16 @@
   }
 
   // 2. Autofill: profile comes from the editor page (editor.html); documents load from background IndexedDB
+  function frameAllowed() {
+    if (window === window.top) return true;
+    const origins = window.location.ancestorOrigins;
+    let topHost = "";
+    try { topHost = new URL(origins[origins.length - 1]).hostname; } catch (e) {}
+    return AegisAutofillData.isTrustedFrame(window.location.hostname, topHost);
+  }
+
   async function autofillApplicationForm(jobContextOverride = "") {
+    if (!frameAllowed()) return { filled: 0, total: 0, required: 0, requiredFilled: 0, percent: 100, items: [] };
     const store = await chrome.storage.local.get(["autofillProfile"]);
     const profile = AegisAutofillData.normalize(store.autofillProfile);
     const jobContext = jobContextOverride || (window === window.top ? extractJobDetails().jobText : "");
