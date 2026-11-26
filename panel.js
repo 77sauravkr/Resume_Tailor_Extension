@@ -260,8 +260,18 @@ $("completion-body").addEventListener("click", async e => {
 $("completion-toggle").onclick = () => { $("completion-body").hidden = !$("completion-body").hidden; };
 
 async function runAutofillAcrossFrames(tabId, jobContext) {
+  // Never run in ad/tracker iframes: pick the trusted frames first, then run only there.
+  let frameIds;
+  try {
+    const frames = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: () => location.hostname });
+    const topHost = frames.find(f => f.frameId === 0)?.result;
+    frameIds = frames.filter(f => f.frameId === 0 || AegisAutofillData.isTrustedFrame(f.result, topHost)).map(f => f.frameId);
+  } catch (e) {
+    return null;
+  }
+
   const runInFrames = () => chrome.scripting.executeScript({
-    target: { tabId, allFrames: true },
+    target: { tabId, frameIds },
     func: ctx => (typeof window.__aegisRunAutofill === "function" ? window.__aegisRunAutofill(ctx) : { __missing: true }),
     args: [jobContext || ""]
   });
@@ -274,7 +284,8 @@ async function runAutofillAcrossFrames(tabId, jobContext) {
   }
 
   if (results.some(r => r.result?.__missing)) {
-    const ok = await ensureContentScripts(tabId, true);
+    const injected = await Promise.all(frameIds.map(id => ensureContentScripts(tabId, false, id)));
+    const ok = injected.some(Boolean);
     if (!ok) return null;
     results = await runInFrames().catch(() => null);
     if (!results) return null;

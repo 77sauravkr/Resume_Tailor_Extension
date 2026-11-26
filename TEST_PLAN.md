@@ -19,7 +19,7 @@ Folder: auto-job-resume-tailor-public (Chrome MV3, no build). Load unpacked at c
 12. AI tailoring places gap keywords: Skills (always, best-fit line) + Summary (AI-written, modest wording) + a few bullets/projects (max 4) ONLY for practice keywords (test plans, test cases, automation frameworks, monitoring...) and only where the bullet already relates; the AI may change 3-4 words, never append clauses. Tools/languages/clouds (AWS, Docker, CI/CD...) never go into bullets. Validator rejects anything else and keeps the original bullet. JSON template is built per job/project (fixes AI returning one entry / misaligned bullets).
    Test with an AI key: gaps selected -> Tailor -> compare bullets vs original; expect 0-4 lightly reworded bullets, score "after" = 100%.
 
-13. UI is now a real toolbar POPUP (action.default_popup = panel.html, 400px wide, scrolls), not the docked side panel. No sidePanel permission.
+13. UI is a docked side panel (sidePanel API), so it stays open while you click on the page.
 14. Without an AI key only Skills + Summary change (panel shows a yellow hint and the result line says why). If the AI call fails (rate limit/bad key) the same fallback runs and the error is shown.
 
 ## Manual test steps
@@ -34,4 +34,4 @@ Folder: auto-job-resume-tailor-public (Chrome MV3, no build). Load unpacked at c
 7. Regressions to look for: console errors in panel/editor/service worker; panel shows "No job detected" on a normal job page; "resume data is empty" after import; AI result missing skills or bullets.
 
 ## Known limits
-Custom dropdowns (React-select, some Workday widgets) are not filled and show as unsure. Word (.docx) resumes are not parsed; use PDF or paste text. Country code/city/state/country are not in most resumes: fill once in Personal.
+Autofill runs in the page, its subdomains and known job-system iframes only (ATS_HOSTS in autofill-data.js). Identity fields (SSN, Aadhaar, PAN, date of birth, bank) are never sent to AI. Legacy .doc is not parsed; use .docx or PDF. Workday custom widgets are not verified. Country code/city/state/country are not in most resumes: fill once in Personal.

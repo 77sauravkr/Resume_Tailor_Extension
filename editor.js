@@ -188,11 +188,12 @@ function importCard() {
 
 // Re-run extraction on the resume file already stored in IndexedDB (or legacy storage).
 async function reimportStored() {
-  const docMeta = state.documents.resume;
-  const loaded = await AegisDocStore.getBlob("resume", docMeta);
+  // When a tailored PDF is active for autofill, read the backed-up original instead.
+  const key = state.documents.masterResume?.name ? "masterResume" : "resume";
+  const loaded = await AegisDocStore.getBlob(key, state.documents[key]);
   if (!loaded?.blob) throw new Error("Upload your resume first.");
   const file = new File([loaded.blob], loaded.name || "resume.pdf", { type: loaded.type || "application/pdf" });
-  const { profile, warning } = await ResumeImport.importFile(file, state);
+  const { profile, warning } = await ResumeImport.importFile(file, state, { keepDocuments: true });
   state = profile;
   await persist();
   return warning;

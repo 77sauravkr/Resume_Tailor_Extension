@@ -15,7 +15,8 @@
 
   function pdfStr(text) {
     let out = "(";
-    for (const ch of String(text || "")) {
+    // The built-in PDF fonts have no rupee sign.
+    for (const ch of String(text || "").replace(/\u20B9\s*/g, "Rs. ")) {
       const code = ch.charCodeAt(0);
       if (ch === "\\" || ch === "(" || ch === ")") {
         out += "\\" + ch;
@@ -53,6 +54,16 @@
     return "/F1";
   }
 
+  // The PDF draws in Times while the page is laid out in Latin Modern, so widths differ.
+  // Times New Roman has the same metrics as the PDF's Times fonts; measure with it.
+  const measureCtx = () => document.createElement("canvas").getContext("2d");
+  function timesWidth(ctx, text, size, fKey) {
+    const italic = fKey === "/F3" || fKey === "/F4" ? "italic " : "";
+    const bold = fKey === "/F2" || fKey === "/F4" ? "bold " : "";
+    ctx.font = `${italic}${bold}${size * 20}px "Times New Roman", Times, serif`;
+    return ctx.measureText(text).width / 20;
+  }
+
   function buildFromPage(pageEl) {
     if (!pageEl) throw new Error("Resume page element not found.");
     const pageRect = pageEl.getBoundingClientRect();
@@ -63,6 +74,7 @@
     const ops = [];
     const walker = document.createTreeWalker(pageEl, NodeFilter.SHOW_TEXT);
     const range = document.createRange();
+    const ctx = measureCtx();
     let node;
 
     while ((node = walker.nextNode())) {
@@ -78,15 +90,21 @@
       const [r, g, b] = parseRgb(cs.color);
       const smallCaps = cs.fontVariantCaps === "small-caps" || cs.fontVariant === "small-caps" || /Caps/i.test(cs.fontFamily);
 
+      // One text object per line. Small caps only changes the font size inside it: the PDF advances
+      // each piece itself, so a word stays one word for text extraction and ATS parsers.
       let cur = null;
       const flushRun = () => {
-        if (!cur || !cur.text.trim()) { cur = null; return; }
-        const txt = cur.text.replace(/\s+/g, " ");
-        const size = cur.isLower ? baseSize * 0.78 : baseSize;
-        const x = (cur.left - pageRect.left) * scaleX;
-        const y = PAGE_H - (cur.bottom - pageRect.top) * scaleY + baseSize * 0.17;
-        ops.push(`BT ${fKey} ${size.toFixed(2)} Tf ${r.toFixed(3)} ${g.toFixed(3)} ${b.toFixed(3)} rg 1 0 0 1 ${x.toFixed(2)} ${y.toFixed(2)} Tm ${pdfStr(txt)} Tj ET`);
+        const line = cur;
         cur = null;
+        if (!line || !line.parts.some(p => p.text.trim())) return;
+        const natural = line.parts.reduce((w, p) => w + timesWidth(ctx, p.text, p.size, fKey), 0);
+        const target = (line.right - line.left) * scaleX;
+        // Stretch or squeeze to the on-screen width so neighbouring runs neither gap nor overlap.
+        const stretch = natural > 0 ? Math.min(130, Math.max(70, (100 * target) / natural)) : 100;
+        const x = (line.left - pageRect.left) * scaleX;
+        const y = PAGE_H - (line.bottom - pageRect.top) * scaleY + baseSize * 0.17;
+        const shows = line.parts.map(p => `${fKey} ${p.size.toFixed(2)} Tf ${pdfStr(p.text)} Tj`).join(" ");
+        ops.push(`BT ${r.toFixed(3)} ${g.toFixed(3)} ${b.toFixed(3)} rg ${stretch.toFixed(2)} Tz 1 0 0 1 ${x.toFixed(2)} ${y.toFixed(2)} Tm ${shows} ET`);
       };
 
       for (let i = 0; i < text.length; i++) {
@@ -94,23 +112,20 @@
         range.setEnd(node, i + 1);
         const rect = range.getBoundingClientRect();
         if (rect.width === 0 && rect.height === 0) continue;
-        const ch = text[i];
-        const isLower = smallCaps && ch >= "a" && ch <= "z";
+        const raw = /\s/.test(text[i]) ? " " : text[i];
+        const isLower = smallCaps && raw >= "a" && raw <= "z";
+        const ch = isLower ? raw.toUpperCase() : raw;
+        const size = isLower ? baseSize * 0.78 : baseSize;
 
-        if (!cur || Math.abs(rect.top - cur.top) > 2.5 || isLower !== cur.isLower) {
+        if (!cur || Math.abs(rect.top - cur.top) > 2.5) {
           flushRun();
-          cur = {
-            text: isLower ? ch.toUpperCase() : ch,
-            left: rect.left,
-            bottom: rect.bottom,
-            top: rect.top,
-            height: rect.height || parseFloat(cs.fontSize),
-            isLower
-          };
-        } else {
-          cur.text += isLower ? ch.toUpperCase() : ch;
-          cur.bottom = Math.max(cur.bottom, rect.bottom);
+          cur = { parts: [], left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
         }
+        const last = cur.parts[cur.parts.length - 1];
+        if (last && (last.size === size || ch === " ")) last.text += ch;
+        else cur.parts.push({ text: ch, size });
+        cur.right = Math.max(cur.right, rect.right);
+        cur.bottom = Math.max(cur.bottom, rect.bottom);
       }
       flushRun();
     }
@@ -133,7 +148,7 @@
         if (fr.height) bulletY = PAGE_H - (fr.bottom - pageRect.top) * scaleY + fr.height * scaleY * 0.17;
       }
       const bx = (r.left - pageRect.left) * scaleX - 9;
-      ops.push(`BT /F1 ${fontSize.toFixed(2)} Tf 0 0 0 rg 1 0 0 1 ${bx.toFixed(2)} ${bulletY.toFixed(2)} Tm (\\225) Tj ET`);
+      ops.push(`BT 100 Tz /F1 ${fontSize.toFixed(2)} Tf 0 0 0 rg 1 0 0 1 ${bx.toFixed(2)} ${bulletY.toFixed(2)} Tm (\\225) Tj ET`);
     }
 
     // Draw section title underlines

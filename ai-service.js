@@ -544,11 +544,11 @@ JD: ${this._condenseJd(jobText, 4500)}`;
   async answerScreeningQuestion(question, jobContext, profile, extra = {}) {
     const inputType = extra.inputType || "textarea";
     const styleGuide = inputType === "number"
-      ? "Return ONLY a single non-negative number (integer or decimal, no units or extra words). If unknown or no experience, return 0."
+      ? "Return ONLY a single non-negative number (integer or decimal, no units or extra words) taken from the facts. If the facts do not give it, return the single word UNKNOWN."
       : inputType === "text"
         ? "Give a concise 1-line answer (under 80 characters, plain value or short phrase, no filler)."
         : "Answer in first person, 2-4 sentences, using only facts below.";
-    const prompt = `You are ${profile?.name || "a candidate"} answering an employer's application question. ${styleGuide} If the facts do not support an answer, give a brief honest answer without inventing numbers, years or skills.
+    const prompt = `You are ${profile?.name || "a candidate"} answering an employer's application question. ${styleGuide} ${inputType === "number" ? "Never guess a number." : "If the facts do not support an answer, give a brief honest answer without inventing numbers, years or skills."}
 FACTS: ${JSON.stringify({ summary: profile?.summary, skills: profile?.skills, experience: (profile?.experience || []).map(e => ({ role: e.role, company: e.company, bullets: e.bullets })), ...extra })}
 JOB: ${this._condenseJd(jobContext, 2000)}
 QUESTION: "${question}"
@@ -765,7 +765,7 @@ Return only the answer text.`;
     if (!refresh && AIService._gemModels && Date.now() - AIService._gemModels.at < 6 * 3600 * 1000) {
       return AIService._gemModels.list;
     }
-    const fallback = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+    const fallback = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
     let list = [];
     if (apiKey) {
       try {
@@ -779,7 +779,6 @@ Return only the answer text.`;
           const rank = id => {
             if (id === "gemini-flash-latest") return 0;
             if (/^gemini-4-hydrogen/i.test(id)) return 1;
-            if (/^gemini-2\.5-flash$/i.test(id)) return 2;
             if (/flash-lite/i.test(id)) return 4;
             if (/flash/i.test(id)) return 3;
             if (/hydrogen|neon/i.test(id)) return 5;
