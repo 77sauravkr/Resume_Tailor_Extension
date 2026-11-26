@@ -28,10 +28,11 @@ function rawSend(tabId, msg, opts = undefined) {
   });
 }
 
-async function ensureContentScripts(tabId, allFrames = false) {
+async function ensureContentScripts(tabId, allFrames = false, frameId = undefined) {
+  const target = frameId !== undefined ? { tabId, frameIds: [frameId] } : { tabId, allFrames };
   try {
-    await chrome.scripting.executeScript({ target: { tabId, allFrames }, files: ["autofill-data.js", "autofill-engine.js", "content.js"] });
-    await chrome.scripting.insertCSS({ target: { tabId, allFrames }, files: ["content.css"] });
+    await chrome.scripting.executeScript({ target, files: ["autofill-data.js", "autofill-engine.js", "content.js"] });
+    await chrome.scripting.insertCSS({ target, files: ["content.css"] });
     return true;
   } catch (e) {
     return false;   // chrome:// pages, web store, etc.
@@ -43,7 +44,7 @@ async function sendToTab(tabId, msg, frameId = undefined) {
   const opts = frameId !== undefined ? { frameId } : undefined;
   let res = await rawSend(tabId, msg, opts);
   if (res) return res;
-  if (!(await ensureContentScripts(tabId, true))) return null;
+  if (!(await ensureContentScripts(tabId, frameId === undefined, frameId))) return null;
   return rawSend(tabId, msg, opts);
 }
 
@@ -80,7 +81,7 @@ async function loadJob(force = false) {
   const prevSig = `${job.role}|${job.company}|${job.text.slice(0, 80)}`;
   job = { role: "", company: "", text: "", url: nextUrl };
   if (currentTab?.id) {
-    const res = await sendToTab(currentTab.id, { action: "GET_JOB_DETAILS", force });
+    const res = await sendToTab(currentTab.id, { action: "GET_JOB_DETAILS", force }, 0);
     if (res?.success) job = { ...res.data, url: res.data.url || nextUrl };
   }
   excluded = new Set();
@@ -91,7 +92,7 @@ async function loadJob(force = false) {
   if (force && currentTab?.id && (job.text.length < 150 || newSig === prevSig)) {
     spaRetryTimer = setTimeout(async () => {
       if (manualJob || !currentTab?.id) return;
-      const retry = await sendToTab(currentTab.id, { action: "GET_JOB_DETAILS", force: true });
+      const retry = await sendToTab(currentTab.id, { action: "GET_JOB_DETAILS", force: true }, 0);
       if (retry?.success && retry.data.text && retry.data.text !== job.text) {
         job = { ...retry.data, url: retry.data.url || currentTab.url };
         renderJob();

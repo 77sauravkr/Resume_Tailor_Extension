@@ -681,7 +681,7 @@ Return only the answer text.`;
       } catch (e) {
         errors.push(`${NAME[a.p]} key ${a.i + 1}: ${e.message}`);
         if (e.status === 429) await this._setCool(a.key, Math.min(Math.max((+e.retryAfter || 30) * 1000, 20000), 120000));
-        else if ([400, 401, 403].includes(e.status)) await this._setCool(a.key, 10 * 60 * 1000);
+        else if ([401, 403].includes(e.status) || e.fatal) await this._setCool(a.key, 10 * 60 * 1000);
       }
     }
     throw new Error(errors.length ? errors.join(" | ") : "No AI key configured. Add a Gemini or Groq key in Settings.");

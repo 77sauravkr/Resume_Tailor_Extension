@@ -219,13 +219,18 @@
     const eduSorted = [...eduNums].sort((a, b) => a - b);
 
     // Fallback: repeating DOM card/fieldset containers when attributes aren't numbered
+    const controlSel = "input, select, textarea, [role='combobox'], button[aria-haspopup='listbox']";
     const repeatBlockIndex = (el, kind) => {
       const kw = kind === "work" ? /company|employer|title|role/i : /school|university|college|degree|major/i;
       let cur = parentOrHost(el);
       for (let depth = 0; depth < 5 && cur && cur !== document.body; depth++, cur = parentOrHost(cur)) {
         const parent = parentOrHost(cur);
         if (!parent) break;
-        const sibs = Array.from(parent.children || []).filter(s => s.tagName === cur.tagName && kw.test(s.textContent || ""));
+        const sibs = Array.from(parent.children || []).filter(s =>
+          s.tagName === cur.tagName &&
+          kw.test(s.textContent || "") &&
+          queryAllDeep(s, controlSel).length >= 2
+        );
         if (sibs.length >= 2) {
           const idx = sibs.indexOf(cur);
           if (idx >= 0) return idx;
