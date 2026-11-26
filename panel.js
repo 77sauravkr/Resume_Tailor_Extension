@@ -68,6 +68,7 @@ async function loadProfile() {
 let excluded = new Set();      // gap keywords the user tapped off
 
 async function loadJob(force = false) {
+  clearTimeout(navDebounceTimer);
   clearTimeout(spaRetryTimer);
   currentTab = await activeTab();
   const nextUrl = currentTab?.url || "";

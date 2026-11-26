@@ -303,7 +303,10 @@ function settingsBlock() {
 
   const fetchGemModels = async (refresh = false, selectedVal) => {
     const apiKey = gem.values()[0] || "";
-    if (!apiKey) return;
+    if (!apiKey) {
+      if (refresh) msg.replaceChildren(notice("Enter a Gemini API key first.", "err"));
+      return;
+    }
     refreshModelsBtn.disabled = true;
     const r = await chrome.runtime.sendMessage({ action: "GET_GEMINI_MODELS", apiKey, refresh }).catch(() => null);
     refreshModelsBtn.disabled = false;

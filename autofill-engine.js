@@ -246,17 +246,25 @@
         const idx = sorted.indexOf(exp.rawIdx);
         return { kind: exp.kind, index: idx >= 0 ? idx : 0 };
       }
+      if (/school|university|college|degree|major|gpa|currently[\s_-]*study|grad/i.test(sig)) return { kind: "edu", index: repeatBlockIndex(el, "edu") };
+      if (/currently[\s_-]*work|job[\s_-]*type|responsibilities/i.test(sig)) return { kind: "work", index: repeatBlockIndex(el, "work") };
       let p = parentOrHost(el);
-      for (let i = 0; i < 6 && p; i++, p = parentOrHost(p)) {
-        const aid = (p.getAttribute?.("data-automation-id") || "") + " " + (p.className || "");
-        if (/work|experience|employment/i.test(aid) && !/education/i.test(aid)) return { kind: "work", index: repeatBlockIndex(el, "work") };
-        if (/education|academic/i.test(aid)) return { kind: "edu", index: repeatBlockIndex(el, "edu") };
+      for (let i = 0; i < 5 && p; i++, p = parentOrHost(p)) {
+        const aid = `${p.getAttribute?.("data-automation-id") || ""} ${typeof p.className === "string" ? p.className : ""}`;
+        if (/(?:work[-_ ]?(?:experience|history)|employment[-_ ]?history|experience[-_ ]?(?:section|list|item|card)|workExperience)/i.test(aid) && !/education/i.test(aid)) {
+          return { kind: "work", index: repeatBlockIndex(el, "work") };
+        }
+        if (/(?:education[-_ ]?(?:section|list|item|card)|academic[-_ ]?(?:history|background)|educationSection)/i.test(aid)) {
+          return { kind: "edu", index: repeatBlockIndex(el, "edu") };
+        }
       }
-      if (/school|university|college|degree|major|gpa|grad/i.test(sig)) return { kind: "edu", index: repeatBlockIndex(el, "edu") };
-      if (/company|employer|currently[\s_-]*work|job[\s_-]*type|responsibilities/i.test(sig)) return { kind: "work", index: repeatBlockIndex(el, "work") };
+      if (/company|employer/i.test(sig)) return { kind: "work", index: repeatBlockIndex(el, "work") };
       return { kind: "general", index: 0 };
     };
   }
+
+  const WORK_ENTRY_KEYS = new Set(["currentCompany", "currentTitle", "jobType", "workDescription", "currentlyWork", "entryStartDate", "entryEndDate", "startMonth", "startYear", "endMonth", "endYear"]);
+  const EDU_ENTRY_KEYS = new Set(["school", "degree", "major", "gpa", "currentlyStudy", "entryStartDate", "entryEndDate", "startMonth", "startYear", "endMonth", "endYear"]);
 
   function formatDateValue(ym, el, part) {
     if (!ym) return "";
@@ -282,36 +290,44 @@
   function resolveFieldValue(key, el, ctx, profile, baseValues) {
     if (!key) return "";
     if (ctx.kind === "work") {
-      const w = profile.work[ctx.index];
-      if (!w) return "";
-      if (key === "currentCompany") return w.company || "";
-      if (key === "currentTitle") return w.title || "";
-      if (key === "jobType") return w.type || "";
-      if (key === "city" && /\blocation\b/i.test(describe(el).sig)) return w.location || profile.personal.city || "";
-      if (key === "workDescription") return w.description || "";
-      if (key === "currentlyWork") return !!w.current;
-      if (key === "entryStartDate" || key === "startDate") return formatDateValue(w.start, el, "full");
-      if (key === "startMonth") return formatDateValue(w.start, el, "month");
-      if (key === "startYear") return formatDateValue(w.start, el, "year");
-      if (key === "entryEndDate") return w.current ? "" : formatDateValue(w.end, el, "full");
-      if (key === "endMonth") return w.current ? "" : formatDateValue(w.end, el, "month");
-      if (key === "endYear") return w.current ? "" : formatDateValue(w.end, el, "year");
+      const isLoc = key === "city" && /\blocation\b/i.test(describe(el).sig);
+      const isStart = key === "startDate" && !/available|earliest|join/i.test(describe(el).sig);
+      if (WORK_ENTRY_KEYS.has(key) || isLoc || isStart) {
+        const w = profile.work[ctx.index];
+        if (!w) return "";
+        if (key === "currentCompany") return w.company || "";
+        if (key === "currentTitle") return w.title || "";
+        if (key === "jobType") return w.type || "";
+        if (isLoc) return w.location || profile.personal.city || "";
+        if (key === "workDescription") return w.description || "";
+        if (key === "currentlyWork") return !!w.current;
+        if (key === "entryStartDate" || isStart) return formatDateValue(w.start, el, "full");
+        if (key === "startMonth") return formatDateValue(w.start, el, "month");
+        if (key === "startYear") return formatDateValue(w.start, el, "year");
+        if (key === "entryEndDate") return w.current ? "" : formatDateValue(w.end, el, "full");
+        if (key === "endMonth") return w.current ? "" : formatDateValue(w.end, el, "month");
+        if (key === "endYear") return w.current ? "" : formatDateValue(w.end, el, "year");
+      }
     }
     if (ctx.kind === "edu") {
-      const e = profile.education[ctx.index];
-      if (!e) return "";
-      if (key === "school") return e.school || "";
-      if (key === "degree") return e.degree || "";
-      if (key === "major") return e.major || "";
-      if (key === "gpa") return e.gpa || "";
-      if (key === "city" && /\blocation\b/i.test(describe(el).sig)) return e.location || profile.personal.city || "";
-      if (key === "currentlyStudy") return !!e.current;
-      if (key === "entryStartDate" || key === "startDate") return formatDateValue(e.start, el, "full");
-      if (key === "startMonth") return formatDateValue(e.start, el, "month");
-      if (key === "startYear") return formatDateValue(e.start, el, "year");
-      if (key === "entryEndDate") return e.current ? "" : formatDateValue(e.end, el, "full");
-      if (key === "endMonth") return e.current ? "" : formatDateValue(e.end, el, "month");
-      if (key === "endYear") return e.current ? "" : formatDateValue(e.end, el, "year");
+      const isLoc = key === "city" && /\blocation\b/i.test(describe(el).sig);
+      const isStart = key === "startDate" && !/available|earliest|join/i.test(describe(el).sig);
+      if (EDU_ENTRY_KEYS.has(key) || isLoc || isStart) {
+        const e = profile.education[ctx.index];
+        if (!e) return "";
+        if (key === "school") return e.school || "";
+        if (key === "degree") return e.degree || "";
+        if (key === "major") return e.major || "";
+        if (key === "gpa") return e.gpa || "";
+        if (isLoc) return e.location || profile.personal.city || "";
+        if (key === "currentlyStudy") return !!e.current;
+        if (key === "entryStartDate" || isStart) return formatDateValue(e.start, el, "full");
+        if (key === "startMonth") return formatDateValue(e.start, el, "month");
+        if (key === "startYear") return formatDateValue(e.start, el, "year");
+        if (key === "entryEndDate") return e.current ? "" : formatDateValue(e.end, el, "full");
+        if (key === "endMonth") return e.current ? "" : formatDateValue(e.end, el, "month");
+        if (key === "endYear") return e.current ? "" : formatDateValue(e.end, el, "year");
+      }
     }
     if (key === "entryStartDate") return formatDateValue(profile.work[0]?.start || profile.education[0]?.start, el, "full");
     if (key === "entryEndDate") return formatDateValue(profile.work[0]?.end || profile.education[0]?.end, el, "full");
@@ -495,6 +511,12 @@
     return true;
   }
 
+  function skillMentioned(skillsStr, term) {
+    if (!skillsStr || !term) return false;
+    const esc = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|[^a-z0-9_+#])${esc}(?![a-z0-9_+#])`, "i").test(skillsStr);
+  }
+
   function isSpecificYearsQuestion(sig, key) {
     if (key !== "yearsExp") return false;
     const m = sig.match(/years?[\s_-]*of[\s_-]*([a-z0-9+#.]+)[\s_-]*experience/);
@@ -595,7 +617,7 @@
         if (answer) {
           setValue(el, answer);
           filled = true;
-        } else if (specificYears && value && baseValues.skills && new RegExp(d.sig.match(/years?[\s_-]*of[\s_-]*([a-z0-9+#.]+)/i)?.[1] || "$^", "i").test(baseValues.skills)) {
+        } else if (specificYears && value && skillMentioned(baseValues.skills, d.sig.match(/years?[\s_-]*of[\s_-]*([a-z0-9+#.]+)/i)?.[1])) {
           setValue(el, value);
           filled = true;
         }
