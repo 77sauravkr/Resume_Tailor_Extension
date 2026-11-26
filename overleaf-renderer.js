@@ -47,9 +47,41 @@ function formatLatexText(str) {
   }).join("");
 }
 
+function formatDegreeWithGpa(e) {
+  const deg = String(e?.degree || "").trim();
+  const rawGpa = String(e?.gpa || "").trim();
+  if (!rawGpa) return deg;
+  const gpaText = /^(c?gpa|grade|percentage|marks)\b/i.test(rawGpa) ? rawGpa : `GPA: ${rawGpa}`;
+  return deg ? `${deg}; ${gpaText}` : gpaText;
+}
+
+const _fontUrl = file => (typeof chrome !== "undefined" && chrome.runtime && typeof chrome.runtime.getURL === "function")
+  ? chrome.runtime.getURL(`fonts/${file}`)
+  : `fonts/${file}`;
+
 // ---- Shared stylesheet (Jake Gutierrez template look). All sizes are em-relative to
 // .page so fitResumePage() can scale the whole sheet to fill exactly one Letter page.
 const RESUME_CSS = `
+  @font-face {
+    font-family: 'Latin Modern Roman';
+    src: url('${_fontUrl("lmroman10-regular.woff")}') format('woff');
+    font-weight: 400; font-style: normal; font-display: swap;
+  }
+  @font-face {
+    font-family: 'Latin Modern Roman';
+    src: url('${_fontUrl("lmroman10-bold.woff")}') format('woff');
+    font-weight: 700; font-style: normal; font-display: swap;
+  }
+  @font-face {
+    font-family: 'Latin Modern Roman';
+    src: url('${_fontUrl("lmroman10-italic.woff")}') format('woff');
+    font-weight: 400; font-style: italic; font-display: swap;
+  }
+  @font-face {
+    font-family: 'Latin Modern Roman Caps';
+    src: url('${_fontUrl("lmromancaps10-regular.woff")}') format('woff');
+    font-weight: 400 700; font-style: normal; font-display: swap;
+  }
   .page, .page * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .page {
     --fs: 1; --extra: 0px; --entry-gap: 0px; --skill-gap: 0px;
@@ -62,12 +94,13 @@ const RESUME_CSS = `
   .page .header { text-align: center; margin-bottom: 0.2em; }
   .page .header h1 {
     font-family: 'Latin Modern Roman Caps', 'Latin Modern Roman', serif;
-    font-size: 2.3em; font-weight: 700; font-variant: small-caps; letter-spacing: 0.03em;
+    font-size: 2.3em; font-weight: 700; font-variant: normal; letter-spacing: 0.03em;
     margin: 0; padding: 0; line-height: 1.1;
   }
   .page .contact-info { font-size: 0.9em; margin-top: 0.15em; }
   .page .section-title {
-    font-variant: small-caps; font-size: 1.2em; letter-spacing: 0.03em;
+    font-family: 'Latin Modern Roman Caps', 'Latin Modern Roman', serif;
+    font-variant: normal; font-size: 1.2em; letter-spacing: 0.03em;
     margin-top: calc(0.6em + var(--extra, 0px)); margin-bottom: 0.25em;
     border-bottom: 0.75pt solid #000; padding-bottom: 0.1em; line-height: 1.15;
   }
@@ -99,54 +132,57 @@ function buildOverleafResumeHTML(data, opts = {}) {
   if (data.contact?.email) contact.push(`<a href="mailto:${escapeAttr(data.contact.email)}">${escapeHtml(data.contact.email)}</a>`);
   (data.contact?.links || []).forEach(l => contact.push(`<a href="${escapeAttr(l.url)}" target="_blank">${escapeHtml(l.label)}</a>`));
 
-  const bullets = (arr, max) => (arr || []).filter(b => b && String(b).trim().length > 3).slice(0, max)
-    .map(b => `<li>${formatHtmlText(b)}</li>`).join("");
+  const bullets = (arr, max) => (arr || []).map((b, bi) => ({ b, bi }))
+    .filter(({ b }) => b && String(b).trim().length > 3).slice(0, max)
+    .map(({ b, bi }) => `<li data-bidx="${bi}">${formatHtmlText(b)}</li>`).join("");
 
-  const skillsHtml = (data.skills || []).filter(s => s && s.category && s.items)
-    .map(s => `<li><strong>${formatHtmlText(s.category)}:</strong> ${formatHtmlText(s.items)}</li>`).join("");
+  const skillsHtml = (data.skills || []).map((s, idx) => ({ s, idx }))
+    .filter(({ s }) => s && s.category && s.items)
+    .map(({ s, idx }) => `<li data-idx="${idx}"><strong data-field="skill-cat">${formatHtmlText(s.category)}:</strong> <span data-field="skill-items">${formatHtmlText(s.items)}</span></li>`).join("");
 
-  const expHtml = (data.experience || []).map(exp => `
-    <div class="entry" data-entry-type="experience">
-      <div class="entry-row main"><span>${formatHtmlText(exp.role)}</span><span>${escapeHtml(exp.date)}</span></div>
-      <div class="entry-row sub"><span>${formatHtmlText(exp.company)}</span><span></span></div>
+  const expHtml = (data.experience || []).map((exp, idx) => `
+    <div class="entry" data-entry-type="experience" data-idx="${idx}">
+      <div class="entry-row main"><span data-field="exp-role">${formatHtmlText(exp.role)}</span><span data-field="exp-date">${escapeHtml(exp.date)}</span></div>
+      <div class="entry-row sub"><span data-field="exp-company">${formatHtmlText(exp.company)}</span><span data-field="exp-location">${formatHtmlText(exp.location || "")}</span></div>
       <ul class="entry-bullets">${bullets(exp.bullets, 4)}</ul>
     </div>`).join("");
 
-  const projHtml = (data.projects || []).slice(0, 3).map(proj => `
-    <div class="entry" data-entry-type="project">
+  const projHtml = (data.projects || []).slice(0, 3).map((proj, idx) => `
+    <div class="entry" data-entry-type="project" data-idx="${idx}">
       <div class="entry-row">
-        <span><strong>${formatHtmlText(proj.title)}</strong>${proj.techStack ? ` | <em>${escapeHtml(proj.techStack)}</em>` : ""}</span>
+        <span><strong data-field="proj-title">${formatHtmlText(proj.title)}</strong>${proj.techStack ? ` | <em data-field="proj-stack">${escapeHtml(proj.techStack)}</em>` : ""}</span>
         <span>${_linksHtml(proj.links)}</span>
       </div>
       <ul class="entry-bullets">${bullets(proj.bullets, 3)}</ul>
     </div>`).join("");
 
-  const eduHtml = (data.education || []).filter(e => e && (e.institution || e.degree)).map(e => `
-    <div class="entry" data-entry-type="education">
-      <div class="entry-row main"><span>${formatHtmlText(e.institution)}</span><span>${formatHtmlText(e.location || "")}</span></div>
-      <div class="entry-row sub"><span>${formatHtmlText(e.degree)}</span><span>${formatHtmlText(e.date || "")}</span></div>
+  const eduHtml = (data.education || []).map((e, idx) => ({ e, idx }))
+    .filter(({ e }) => e && (e.institution || e.degree)).map(({ e, idx }) => `
+    <div class="entry" data-entry-type="education" data-idx="${idx}">
+      <div class="entry-row main"><span data-field="edu-institution">${formatHtmlText(e.institution)}</span><span data-field="edu-location">${formatHtmlText(e.location || "")}</span></div>
+      <div class="entry-row sub"><span data-field="edu-degree">${formatHtmlText(formatDegreeWithGpa(e))}</span><span data-field="edu-date">${formatHtmlText(e.date || "")}</span></div>
     </div>`).join("");
 
-  const achHtml = (data.achievements || []).slice(0, 3).map(a => {
+  const achHtml = (data.achievements || []).slice(0, 3).map((a, idx) => {
     if (a && typeof a === "object" && a.text) {
-      const link = a.link ? ` &mdash; <a href="${escapeAttr(a.link.url)}" target="_blank">${escapeHtml(a.link.label || "Details")}</a>` : "";
-      return `<li>${formatHtmlText(a.text)}${link}</li>`;
+      const link = a.link?.url ? ` &mdash; <a href="${escapeAttr(a.link.url)}" target="_blank">${escapeHtml(a.link.label || "Details")}</a>` : "";
+      return `<li data-idx="${idx}"><span data-field="ach-text">${formatHtmlText(a.text)}</span>${link}</li>`;
     }
-    return `<li>${formatHtmlText(String(a))}</li>`;
+    return `<li data-idx="${idx}"><span data-field="ach-text">${formatHtmlText(String(a))}</span></li>`;
   }).join("");
 
   const body = `
   <div class="page" id="resume-page">
     <div class="content">
       <div class="header">
-        <h1>${escapeHtml(data.name || "Candidate")}</h1>
+        <h1 data-field="name">${escapeHtml(data.name || "Candidate")}</h1>
         <div class="contact-info">${contact.join(" | ")}</div>
       </div>
-      ${data.summary ? `<div class="section-title">Summary</div><div class="summary-text">${formatHtmlText(data.summary)}</div>` : ""}
-      <div class="section-title">Technical Skills</div><ul class="skills-list">${skillsHtml}</ul>
-      <div class="section-title">Experience</div>${expHtml}
-      <div class="section-title">Projects</div>${projHtml}
-      <div class="section-title">Education</div>${eduHtml}
+      ${data.summary ? `<div class="section-title">Summary</div><div class="summary-text" data-field="summary">${formatHtmlText(data.summary)}</div>` : ""}
+      ${skillsHtml ? `<div class="section-title">Technical Skills</div><ul class="skills-list">${skillsHtml}</ul>` : ""}
+      ${expHtml ? `<div class="section-title">Experience</div>${expHtml}` : ""}
+      ${projHtml ? `<div class="section-title">Projects</div>${projHtml}` : ""}
+      ${eduHtml ? `<div class="section-title">Education</div>${eduHtml}` : ""}
       ${achHtml ? `<div class="section-title">Achievements</div><ul class="achievements-list">${achHtml}</ul>` : ""}
     </div>
   </div>`;
@@ -155,7 +191,6 @@ function buildOverleafResumeHTML(data, opts = {}) {
 
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>${escapeHtml(data.name || "Candidate")} - Resume</title>
-<link href="https://fonts.cdnfonts.com/css/latin-modern-roman" rel="stylesheet">
 <style>
   @page { size: letter portrait; margin: 0; }
   html, body { margin: 0; padding: 0; background: #fff; height: 11in; overflow: hidden; }
@@ -344,10 +379,11 @@ const LATEX_PREAMBLE = String.raw`\documentclass[letterpaper,11pt]{article}
 `;
 
 function buildOverleafLatexCode(data) {
-  const href = (url, label) => `\\href{${url}}{\\textcolor{blue}{${escapeLatex(label)}}}`;
+  const safeHrefUrl = u => String(u || "").replace(/([%#])/g, "\\$1");
+  const href = (url, label) => `\\href{${safeHrefUrl(url)}}{\\textcolor{blue}{${escapeLatex(label)}}}`;
   const header = [];
   if (data.contact?.phone) header.push(`\\small ${escapeLatex(data.contact.phone)}`);
-  if (data.contact?.email) header.push(`\\href{mailto:${data.contact.email}}{\\textcolor{blue}{${escapeLatex(data.contact.email)}}}`);
+  if (data.contact?.email) header.push(`\\href{mailto:${safeHrefUrl(data.contact.email)}}{\\textcolor{blue}{${escapeLatex(data.contact.email)}}}`);
   (data.contact?.links || []).forEach(l => header.push(href(l.url, l.label)));
 
   const items = arr => (arr || []).filter(b => b && String(b).trim().length > 3)
@@ -356,30 +392,30 @@ function buildOverleafLatexCode(data) {
   const skills = (data.skills || []).filter(x => x && x.category && x.items)
     .map(x => `    \\item \\textbf{${escapeLatex(x.category)}:} ${formatLatexText(x.items)}`).join("\n");
 
-  const exp = (data.experience || []).map(e => `\\resumeSubheading
+  const exp = (data.experience || []).map(e => {
+    const expItems = items(e.bullets);
+    return `\\resumeSubheading
   {${formatLatexText(e.role)}}{${escapeLatex(e.date)}}
-  {${formatLatexText(e.company)}}{}
-  \\resumeItemListStart
-${items(e.bullets)}
-  \\resumeItemListEnd`).join("\n\n");
+  {${formatLatexText(e.company)}}{${escapeLatex(e.location || "")}}` +
+      (expItems ? `\n  \\resumeItemListStart\n${expItems}\n  \\resumeItemListEnd` : "");
+  }).join("\n\n");
 
   const proj = (data.projects || []).slice(0, 3).map(pr => {
     const links = (pr.links || []).map(l => href(l.url, l.label)).join(" $|$\n  ");
+    const projItems = items(pr.bullets);
     return `  \\resumeProjectHeading
-  {\\textbf{${formatLatexText(pr.title)}}${pr.techStack ? ` $|$ \\emph{${escapeLatex(pr.techStack)}}` : ""} \\hfill
-  ${links}}{}
-  \\resumeItemListStart
-${items(pr.bullets)}
-  \\resumeItemListEnd`;
+  {\\textbf{${formatLatexText(pr.title)}}${pr.techStack ? ` $|$ \\emph{${escapeLatex(pr.techStack)}}` : ""}${links ? ` \\hfill\n  ${links}` : ""}}{}` +
+      (projItems ? `\n  \\resumeItemListStart\n${projItems}\n  \\resumeItemListEnd` : "");
   }).join("\n\n");
 
   const edu = (data.education || []).filter(e => e && (e.institution || e.degree)).map(e => `      \\resumeSubheading
         {${escapeLatex(e.institution)}}{${escapeLatex(e.location || "")}}
-        {${escapeLatex(e.degree)}}{${escapeLatex(e.date || "")}}`).join("\n");
+        {${escapeLatex(formatDegreeWithGpa(e))}}{${escapeLatex(e.date || "")}}`).join("\n");
 
   const ach = (data.achievements || []).slice(0, 3).map(a => {
     if (a && typeof a === "object" && a.text) {
-      return `  \\item ${formatLatexText(a.text)} ---\n  ${href(a.link.url, a.link.label || "Details")}`;
+      const link = a.link?.url ? ` ---\n  ${href(a.link.url, a.link.label || "Details")}` : "";
+      return `  \\item ${formatLatexText(a.text)}${link}`;
     }
     return `  \\item ${formatLatexText(String(a))}`;
   }).join("\n");
@@ -400,28 +436,11 @@ ${LATEX_PREAMBLE}
 \\end{center}
 
 ${data.summary ? `\\section{Summary}\n${formatLatexText(data.summary)}\n` : ""}
-\\section*{Technical Skills}
-\\begin{itemize}[leftmargin=0.6cm]
-${skills}
-\\end{itemize}
-
-\\section{Experience}
-\\resumeSubHeadingListStart
-${exp}
-\\resumeSubHeadingListEnd
-
-\\section{Projects}
-\\resumeSubHeadingListStart
-${proj}
-\\resumeSubHeadingListEnd
-
-\\section{Education}
-\\resumeSubHeadingListStart
-${edu}
-\\resumeSubHeadingListEnd
-
-${ach ? `\\section{Achievements}\n\\begin{itemize}[itemsep=1pt]\n${ach}\n\\end{itemize}\n` : ""}
-\\end{document}
+${skills ? `\\section*{Technical Skills}\n\\begin{itemize}[leftmargin=0.6cm]\n${skills}\n\\end{itemize}\n` : ""}
+${exp ? `\\section{Experience}\n\\resumeSubHeadingListStart\n${exp}\n\\resumeSubHeadingListEnd\n` : ""}
+${proj ? `\\section{Projects}\n\\resumeSubHeadingListStart\n${proj}\n\\resumeSubHeadingListEnd\n` : ""}
+${edu ? `\\section{Education}\n\\resumeSubHeadingListStart\n${edu}\n\\resumeSubHeadingListEnd\n` : ""}
+${ach ? `\\section{Achievements}\n\\begin{itemize}[itemsep=1pt]\n${ach}\n\\end{itemize}\n` : ""}\\end{document}
 `;
 }
 

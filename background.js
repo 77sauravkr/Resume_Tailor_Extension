@@ -1,8 +1,16 @@
 // background.js - AI-backed actions (tailor, cover letter, answers) and opening pages
 
-importScripts("profile-defaults.js", "autofill-data.js", "ai-service.js");
+importScripts("profile-defaults.js", "autofill-data.js", "ai-service.js", "doc-storage.js");
+
+function enableSidePanelOnClick() {
+  if (chrome.sidePanel?.setPanelBehavior) {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  }
+}
+enableSidePanelOnClick();
 
 chrome.runtime.onInstalled.addListener(async details => {
+  enableSidePanelOnClick();
   if (details.reason === "install") {
     chrome.tabs.create({ url: chrome.runtime.getURL("editor.html?setup=1") });
   }
@@ -50,7 +58,7 @@ const handlers = {
     let after = data.atsAfter, before = data.atsBefore, hit = 0, total = 0, skipped = [];
     if (Array.isArray(m.requirements) && m.requirements.length) {
       const text = ai._profileText(data);
-      const isHit = r => r.status === "matched" || termRe(r.term).test(text);
+      const isHit = r => r.status === "matched" || ai.hasTerm(text, r.term);
       hit = m.requirements.filter(isHit).length; total = m.requirements.length;
       skipped = m.requirements.filter(r => !isHit(r)).map(r => r.term);
       after = Math.round(100 * hit / total);
@@ -83,10 +91,36 @@ const handlers = {
     const { resume, ai, profile } = await load();
     if (!ai.hasKey) return { success: true, answer: "" };
     const answer = await ai.answerScreeningQuestion(m.question, m.jobContext, resume, {
-      noticePeriod: profile.preferences.noticePeriod, expectedSalary: profile.preferences.salary,
-      location: [profile.personal.city, profile.personal.country].filter(Boolean).join(", ")
+      noticePeriod: profile.preferences.noticePeriod,
+      expectedSalary: profile.preferences.salary,
+      currentSalary: profile.preferences.currentCtc,
+      location: [profile.personal.city, profile.personal.country].filter(Boolean).join(", "),
+      inputType: m.inputType || "textarea",
+      maxLength: m.maxLength || 0
     });
     return { success: true, answer };
+  },
+
+  async GET_GEMINI_MODELS(m) {
+    const { ai, aiConfig } = await load();
+    const key = m.apiKey || (aiConfig.geminiKeys || []).find(Boolean) || "";
+    if (!key) return { success: false, error: "Enter a Gemini API key first." };
+    try {
+      const models = await ai.listGeminiModels(key, !!m.refresh);
+      return { success: true, models };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  },
+
+  async GET_DOCUMENT_DATA(m) {
+    const kind = m.kind === "coverLetter" ? "coverLetter" : "resume";
+    const s = await chrome.storage.local.get("autofillProfile");
+    const profile = AegisAutofillData.normalize(s.autofillProfile);
+    const meta = profile.documents?.[kind];
+    if (!meta) return { success: true, doc: null };
+    const doc = await AegisDocStore.get(kind, meta);
+    return { success: true, doc };
   },
 
   async PARSE_RESUME(m) {

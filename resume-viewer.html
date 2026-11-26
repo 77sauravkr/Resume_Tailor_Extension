@@ -15,15 +15,26 @@
         <div id="sub" class="sub"></div>
       </div>
     </div>
-    <button id="btn-pdf" class="primary">Download PDF</button>
+    <div class="actions">
+      <span id="save-status" class="save-status" hidden></span>
+      <button id="btn-diff" class="secondary" hidden>Compare Changes</button>
+      <button id="btn-copy-tex" class="secondary">Copy .tex</button>
+      <button id="btn-dl-tex" class="secondary">Download .tex</button>
+      <button id="btn-use-autofill" class="mint">Use for Autofill</button>
+      <button id="btn-pdf" class="primary">Download PDF</button>
+    </div>
   </header>
+
+  <section id="diff-panel" class="diff-panel no-print" hidden></section>
 
   <main class="stage">
     <div id="resume-container" class="resume-paper" contenteditable="true" spellcheck="false"></div>
   </main>
-  <p class="hint no-print">Click any text to edit it before downloading.</p>
+  <p class="hint no-print">Click any text to edit (auto-saved) before exporting PDF, .tex, or setting it for Autofill.</p>
 
+  <script src="doc-storage.js"></script>
   <script src="overleaf-renderer.js"></script>
+  <script src="pdf-builder.js"></script>
   <script src="resume-viewer.js"></script>
 </body>
 </html>
