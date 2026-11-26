@@ -1,7 +1,7 @@
 [hidden] { display: none !important; }
 :root { --accent: #19e59a; --accent-ink: #063d29; --deep: #2d8a69; --line: #e6e8e6; --muted: #6b7570; --bg: #f4f6f5; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font: 14px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif; color: #111; background: var(--bg); padding: 12px; width: 400px; }
+body { font: 14px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif; color: #111; background: var(--bg); padding: 12px; width: 100%; min-width: 280px; overflow-x: hidden; }
 header { display: flex; justify-content: space-between; align-items: center; padding: 2px 2px 12px; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; }
 .logo { width: 20px; height: 20px; border-radius: 6px; background: var(--deep); position: relative; }

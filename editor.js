@@ -58,7 +58,7 @@ const SECTIONS = [
   ] }] },
   { id: "signup", title: "Sign-up", hint: "Used when a portal (e.g. Workday) requires an account. Stored only in this browser's local storage.",
     blocks: [{ grid: "signup", fields: [["email", "Registration email", { type: "email", w: 6 }], ["password", "Password", { type: "password", w: 6 }]] }] },
-  { id: "documents", title: "Documents", hint: "Your resume is attached to resume upload fields. PDF, up to 4 MB.", blocks: [{ documents: true }] },
+  { id: "documents", title: "Documents", hint: "Your resume is attached to resume upload fields. PDF or DOCX, stored in IndexedDB.", blocks: [{ documents: true }] },
   { id: "settings", title: "Settings", hint: "AI key for resume extraction, tailoring and cover letters. Stored only in this browser.", blocks: [{ settings: true }], noSave: true }
 ];
 
@@ -150,8 +150,8 @@ async function loadAiConfig() {
 
 function importCard() {
   const msg = h("div");
-  const input = h("input", { type: "file", accept: ".pdf,.txt,.md,application/pdf", hidden: true });
-  const pick = h("button", { class: "mint", text: "Upload resume (PDF)" });
+  const input = h("input", { type: "file", accept: ".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document", hidden: true });
+  const pick = h("button", { class: "mint", text: "Upload resume (PDF / DOCX)" });
   const pasteBtn = h("button", { class: "secondary", text: "Import pasted text" });
   const paste = h("textarea", { placeholder: "…or paste your resume text here", style: "margin-top:14px;min-height:110px" });
   const keyInput = h("input", { type: "password", placeholder: "Gemini API key (free at aistudio.google.com)" });
@@ -186,12 +186,12 @@ function importCard() {
     paste, h("div", { style: "margin-top:10px" }, pasteBtn), h("div", { style: "margin-top:14px" }, msg));
 }
 
-// Re-run extraction on the resume file already stored in this browser.
+// Re-run extraction on the resume file already stored in IndexedDB (or legacy storage).
 async function reimportStored() {
-  const doc = state.documents.resume;
-  if (!doc?.dataUrl) throw new Error("Upload your resume first.");
-  const blob = await (await fetch(doc.dataUrl)).blob();
-  const file = new File([blob], doc.name || "resume.pdf", { type: doc.type || "application/pdf" });
+  const docMeta = state.documents.resume;
+  const loaded = await AegisDocStore.getBlob("resume", docMeta);
+  if (!loaded?.blob) throw new Error("Upload your resume first.");
+  const file = new File([loaded.blob], loaded.name || "resume.pdf", { type: loaded.type || "application/pdf" });
   const { profile, warning } = await ResumeImport.importFile(file, state);
   state = profile;
   await persist();
@@ -202,25 +202,59 @@ function documentsBlock() {
   const wrap = h("div", {}, importCard(), h("div", { class: "sub-h", text: "Files used for upload fields" }));
   [["resume", "Resume"], ["coverLetter", "Cover letter"]].forEach(([key, title]) => {
     const name = h("span", { text: state.documents[key]?.name || "Not uploaded" });
-    const input = h("input", { type: "file", accept: ".pdf,.doc,.docx,application/pdf", hidden: true });
+    const input = h("input", { type: "file", accept: ".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document", hidden: true });
     const pick = h("button", { class: "secondary", text: "Upload" });
     const clear = h("button", { class: "link", text: "Remove" });
     pick.onclick = () => input.click();
-    clear.onclick = () => { state.documents[key] = null; name.textContent = "Not uploaded"; };
+    clear.onclick = async () => {
+      await AegisDocStore.remove(key);
+      state.documents[key] = null;
+      if (key === "resume") {
+        await AegisDocStore.remove("masterResume");
+        state.documents.masterResume = null;
+      }
+      await persist();
+      render();
+      setStatus("Removed.");
+    };
     input.onchange = async () => {
       const f = input.files[0];
       if (!f) return;
-      if (f.size > 4 * 1024 * 1024) return setStatus("File is larger than 4 MB", true);
-      const dataUrl = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(f); });
-      state.documents[key] = { name: f.name, type: f.type || "application/pdf", dataUrl };
-      name.textContent = f.name;
+      if (f.size > 10 * 1024 * 1024) return setStatus("File is larger than 10 MB", true);
+      try {
+        state.documents[key] = await AegisDocStore.put(key, f);
+        if (key === "resume") {
+          await AegisDocStore.remove("masterResume");
+          state.documents.masterResume = null;
+        }
+        await persist();
+        name.textContent = f.name;
+        render();
+        setStatus("Saved to browser storage.");
+      } catch (e) {
+        setStatus("Could not save file: " + e.message, true);
+      }
     };
     const extra = [];
     if (key === "resume") {
+      if (state.documents.masterResume?.name) {
+        const restore = h("button", { class: "secondary", text: "Restore original", title: `Switch back to ${state.documents.masterResume.name}` });
+        restore.onclick = async () => {
+          const orig = await AegisDocStore.getBlob("masterResume", state.documents.masterResume);
+          if (!orig?.blob) return setStatus("Original resume backup not found.", true);
+          state.documents.resume = await AegisDocStore.put("resume", new File([orig.blob], orig.name, { type: orig.type }));
+          state.documents.masterResume = null;
+          await AegisDocStore.remove("masterResume");
+          await persist();
+          render();
+          setStatus("Restored original resume.");
+        };
+        extra.push(restore);
+      }
       const reread = h("button", { class: "secondary", text: "Re-read resume" });
       reread.onclick = async () => {
         reread.disabled = true;
-        try { const w = await reimportStored(); setStatus(w || "Resume read again. Check Work experience and Education."); }
+        try { const w = await reimportStored(); render(); setStatus(w || "Resume read again. Check Work experience and Education."); }
         catch (e) { setStatus(e.message, true); }
         reread.disabled = false;
       };
@@ -254,14 +288,53 @@ function settingsBlock() {
   const groq = keyList("gsk_…");
   const orr = keyList("sk-or-v1-…");
   const eng = h("select", {}, ...[["gemini", "Gemini (recommended)"], ["groq", "Groq"], ["openrouter", "OpenRouter"]].map(([v, t]) => h("option", { value: v, text: t })));
+  const gemModel = h("select", {}, h("option", { value: "auto", text: "Auto (recommended — live models)" }));
+  const refreshModelsBtn = h("button", { class: "secondary", text: "Refresh", type: "button", title: "Fetch available Gemini models from API" });
   const msg = h("div", { style: "margin-top:12px" });
+
+  const populateGemModels = (models, selectedVal) => {
+    const cur = selectedVal ?? gemModel.value ?? "auto";
+    const opts = [["auto", "Auto (recommended — live models)"]];
+    (models || []).forEach(id => { if (id && id !== "auto") opts.push([id, id]); });
+    if (cur && cur !== "auto" && !opts.some(([v]) => v === cur)) opts.push([cur, `${cur} (saved)`]);
+    gemModel.replaceChildren(...opts.map(([v, t]) => h("option", { value: v, text: t })));
+    gemModel.value = cur;
+  };
+
+  const fetchGemModels = async (refresh = false, selectedVal) => {
+    const apiKey = gem.values()[0] || "";
+    if (!apiKey) return;
+    refreshModelsBtn.disabled = true;
+    const r = await chrome.runtime.sendMessage({ action: "GET_GEMINI_MODELS", apiKey, refresh }).catch(() => null);
+    refreshModelsBtn.disabled = false;
+    if (r?.success && Array.isArray(r.models)) {
+      populateGemModels(r.models, selectedVal);
+      if (refresh) msg.replaceChildren(notice(`Loaded ${r.models.length} Gemini models.`));
+    } else if (refresh && r?.error) {
+      msg.replaceChildren(notice(r.error, "err"));
+    }
+  };
+  refreshModelsBtn.onclick = () => fetchGemModels(true);
+
   loadAiConfig().then(c => {
     gem.fill((c.geminiKeys || []).filter(Boolean));
     groq.fill([...(c.groqKeys || []), c.groqKey].filter(Boolean).filter((k, i, a) => a.indexOf(k) === i));
     orr.fill((c.openrouterKeys || []).filter(Boolean));
     eng.value = c.preferredProvider || "gemini";
+    const savedModel = c.geminiModel || "auto";
+    populateGemModels([], savedModel);
+    if ((c.geminiKeys || []).some(Boolean)) fetchGemModels(false, savedModel);
   });
-  const save = async () => chrome.storage.local.set({ aiConfig: { geminiKeys: gem.values(), groqKeys: groq.values(), openrouterKeys: orr.values(), groqKey: "", preferredProvider: eng.value } });
+  const save = async () => chrome.storage.local.set({
+    aiConfig: {
+      geminiKeys: gem.values(),
+      groqKeys: groq.values(),
+      openrouterKeys: orr.values(),
+      groqKey: "",
+      geminiModel: gemModel.value || "auto",
+      preferredProvider: eng.value
+    }
+  });
   const saveBtn = h("button", { class: "mint", text: "Save keys" });
   const testBtn = h("button", { class: "secondary", text: "Test" });
   saveBtn.onclick = async () => { await save(); msg.replaceChildren(notice("Saved.")); };
@@ -277,7 +350,8 @@ function settingsBlock() {
       keyField("Gemini API keys", gem),
       keyField("Groq API keys (optional fallback)", groq),
       keyField("OpenRouter API keys (optional fallback, free models need no card)", orr),
-      h("div", { class: "f w3" }, h("label", { text: "Preferred engine" }), eng)),
+      h("div", { class: "f w3" }, h("label", { text: "Preferred engine" }), eng),
+      h("div", { class: "f w3" }, h("label", { text: "Gemini model" }), h("div", { style: "display:flex;gap:8px" }, gemModel, refreshModelsBtn))),
     h("div", { class: "muted", style: "margin-top:10px" }, "If a key hits its limit or fails, the next key is used, then the other engine."),
     h("div", { style: "margin-top:16px;display:flex;gap:10px" }, saveBtn, testBtn), msg);
   return wrap;
@@ -334,6 +408,11 @@ function setStatus(msg, bad) {
 }
 
 async function persist() {
+  for (const key of ["resume", "coverLetter"]) {
+    if (state.documents[key]?.dataUrl) {
+      state.documents[key] = await AegisDocStore.put(key, state.documents[key]);
+    }
+  }
   const resume = D.toResumeProfile(state);
   await chrome.storage.local.set({ autofillProfile: state, candidateProfile: resume, masterGenericResume: resume });
 }
@@ -341,6 +420,15 @@ async function persist() {
 async function init() {
   const store = await chrome.storage.local.get("autofillProfile");
   state = D.normalize(store.autofillProfile);
+  // Migrate any legacy base64 blobs out of chrome.storage.local into IndexedDB
+  let migrated = false;
+  for (const key of ["resume", "coverLetter"]) {
+    if (state.documents[key]?.dataUrl) {
+      state.documents[key] = await AegisDocStore.put(key, state.documents[key]);
+      migrated = true;
+    }
+  }
+  if (migrated) await persist();
   if (params.get("section") && SECTIONS.some(s => s.id === params.get("section"))) active = params.get("section");
   if (setup && !D.isEmpty(state)) step = 1;
 
@@ -362,7 +450,7 @@ async function init() {
   render();
 
   // A resume was uploaded earlier but nothing was extracted (older version / failed parse): read it again.
-  if (state.documents.resume?.dataUrl && !state.work.length && !state.education.length && !state.resume.projects.length) {
+  if (state.documents.resume?.name && !state.work.length && !state.education.length && !state.resume.projects.length) {
     try { await reimportStored(); render(); setStatus("Re-read your saved resume. Please review the details."); }
     catch (e) { /* leave the form as is */ }
   }

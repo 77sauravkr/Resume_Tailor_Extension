@@ -5,5 +5,6 @@ const DEFAULT_AI_CONFIG = {
   groqKeys: [],
   openrouterKeys: [],
   geminiKeys: [""],
+  geminiModel: "auto",
   preferredProvider: "gemini"
 };

@@ -38,7 +38,7 @@
       },
       preferences: { salary: "", currentCtc: "", noticePeriod: "", startDate: "", source: "LinkedIn", notes: "" },
       signup: { email: "", password: "" },
-      documents: { resume: null, coverLetter: null },
+      documents: { resume: null, coverLetter: null, masterResume: null },
       coverLetterText: "",
       resumeText: "",
       resume: { summary: "", skillGroups: [], projects: [], achievements: [] }
@@ -126,7 +126,7 @@
       skills: r.skillGroups.length ? r.skillGroups.map(g => ({ category: g.category, items: g.items }))
         : (p.skills ? [{ category: "Skills", items: p.skills }] : []),
       experience: p.work.filter(w => w.title || w.company).map(w => ({
-        role: w.title, company: [w.company, w.location].filter(Boolean).join(", "),
+        role: w.title, company: w.company, location: w.location,
         date: rangeLabel(w), bullets: splitLines(w.description)
       })),
       projects: r.projects.map(x => ({
@@ -136,7 +136,9 @@
       })),
       education: p.education.filter(e => e.school).map(e => ({
         institution: e.school, location: e.location,
-        degree: e.major && !new RegExp("\\b" + e.major.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$", "i").test(e.degree) ? `${e.degree} in ${e.major}`.trim() : e.degree, date: rangeLabel(e)
+        degree: e.major && !new RegExp("\\b" + e.major.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$", "i").test(e.degree) ? `${e.degree} in ${e.major}`.trim() : e.degree,
+        gpa: e.gpa || "",
+        date: rangeLabel(e)
       })),
       achievements: r.achievements.map(a => ({
         text: a.text, ...(a.url ? { link: { label: "Details", url: a.url } } : {})

@@ -57,10 +57,50 @@ class AIService {
     this.groqKeys = [...(config.groqKeys || []), config.groqKey].filter(Boolean).filter((k, i, a) => a.indexOf(k) === i);
     this.groqKey = this.groqKeys[0] || "";
     this.openrouterKeys = (config.openrouterKeys || []).filter(Boolean);
+    this.geminiModel = config.geminiModel || "auto";
     this.preferred = config.preferredProvider || "gemini";
   }
 
   get hasKey() { return this.geminiKeys.length > 0 || this.groqKeys.length > 0 || this.openrouterKeys.length > 0; }
+
+  hasTerm(text, term) {
+    const src = String(text || "");
+    const t = String(term || "").trim();
+    if (!src || !t) return false;
+    const c = canon(t);
+    if (termRe(t).test(src) || (c !== t && termRe(c).test(src))) return true;
+    const lowT = t.toLowerCase(), lowC = c.toLowerCase();
+    for (const [alias, target] of Object.entries(ALIASES)) {
+      if (target.toLowerCase() === lowC && termRe(alias).test(src)) return true;
+    }
+    const lowSrc = src.toLowerCase();
+    const alts = new Set([...(ALT[lowT] || []), ...(ALT[lowC] || [])]);
+    for (const [k, list] of Object.entries(ALT)) {
+      if (list.some(a => a.trim() === lowT || a.trim() === lowC) && termRe(k).test(src)) return true;
+    }
+    for (const a of alts) {
+      if (a.startsWith(" ") || a.endsWith(" ") || a.endsWith(",")) {
+        if (lowSrc.includes(a)) return true;
+      } else if (termRe(a).test(src)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  _condenseJd(jdText, maxLen = 7000) {
+    const jd = String(jdText || "").trim();
+    if (jd.length <= maxLen) return jd;
+    const reqIdx = jd.search(/\b(requirements|qualifications|what you(?:'ll| will) (?:bring|need|do)|skills|must have|preferred|tech(?:nical)? stack|minimum qualifications|responsibilities)\b/i);
+    if (reqIdx > 400 && reqIdx < jd.length - 400) {
+      const headBudget = Math.min(1800, Math.floor(maxLen * 0.28));
+      const tailBudget = maxLen - headBudget - 10;
+      const tailStart = Math.max(headBudget, Math.min(reqIdx, jd.length - tailBudget));
+      return jd.slice(0, headBudget).trim() + "\n...\n" + jd.slice(tailStart, tailStart + tailBudget).trim();
+    }
+    const half = Math.floor((maxLen - 10) * 0.45);
+    return jd.slice(0, half).trim() + "\n...\n" + jd.slice(-(maxLen - half - 10)).trim();
+  }
 
   // ---------- Candidate knowledge ----------
   _profileText(p) {
@@ -81,8 +121,7 @@ class AIService {
       const label = canon(term);
       if (seen.has(label.toLowerCase())) continue;
       seen.add(label.toLowerCase());
-      const hl = have.toLowerCase();
-      const inProfile = termRe(term).test(have) || termRe(label).test(have) || (ALT[label.toLowerCase()] || []).some(a => hl.includes(a));
+      const inProfile = this.hasTerm(have, term) || this.hasTerm(have, label);
       (inProfile ? matched : missing).push(label);
     }
     matched.splice(0, matched.length, ...dropShorter(matched));
@@ -113,7 +152,7 @@ class AIService {
         requirements: [...base.matched.map(term => ({ term, status: "matched" })), ...gaps.map(g => ({ term: g.term, status: g.status }))]
       };
     };
-    const jd = String(jdText || "").slice(0, 3500);
+    const jd = this._condenseJd(jdText, 7000);
     if (!this.hasKey) return keywordResult("no-key");
     if (jd.length < 60) return keywordResult();
     const have = this._profileText(profile || {});
@@ -199,7 +238,7 @@ KEYWORDS THE CANDIDATE CONFIRMED THEY CAN ADD: ${JSON.stringify(analysis.add)}
   - bullets that already relate to them (rewrite these lightly to include the keyword when it reads naturally, otherwise skip): ${placements.length ? placements.join(" | ") : "none"}
 
 JOB DESCRIPTION:
-${String(jobText || "").slice(0, 3500)}
+${this._condenseJd(jobText, 7000)}
 
 RULES
 1. Rewrite each bullet at the same index, keeping every concrete fact, tool and noun of the original bullet. Mirror the JD's wording where the bullet already says the same thing.
@@ -325,7 +364,12 @@ ${JSON.stringify({
       return {
         ...entry,
         bullets: entry.bullets.map((orig, j) => {
-          const cand = this._limitBold(this._plain(String(aiB[j] || "")), 2);
+          let cand = this._limitBold(this._plain(String(aiB[j] || "")), 2);
+          const visLen = cand.replace(/\*\*/g, "").length;
+          if (visLen > 118) {
+            if (visLen > 160) return orig;
+            cand = this._clampBullet(cand, 118);
+          }
           if (cand.replace(/\*\*/g, "").length > 118) return orig;   // would wrap to a second line
           if (!this._bulletOk(cand, orig, allowed, analysis.missing, entryText, addOk)) return orig;
           if (carriesAdd(cand) && !carriesAdd(orig)) {
@@ -493,18 +537,31 @@ ${String(text).slice(0, 14000)}`;
     const prompt = `Write a concise, honest cover letter (3 short paragraphs, under 220 words) for ${profile.name} applying to "${role || "the role"}" at ${company || "the company"}.
 Use ONLY facts in the profile: no invented scale, user counts, teamwork styles, years or skills. ${yrs >= 1.5 ? `Total professional experience is about ${Math.round(yrs)} years.` : 'Do not state any number of years; the candidate is early-career.'} Do not mention methodologies (agile, scrum, etc.) or practices unless written in the profile. Mention 2-3 things from the JD the candidate genuinely matches. No placeholders, no cliches, no dashes. Plain text, start with "Dear Hiring Team,", end with "Sincerely," and the name.
 PROFILE: ${JSON.stringify(ctx)}
-JD: ${String(jobText || "").slice(0, 2500)}`;
+JD: ${this._condenseJd(jobText, 4500)}`;
     return this._plain((await this._callWithFallback(prompt, { json: false }))).replace(/ ?\n ?/g, "\n");
   }
 
   async answerScreeningQuestion(question, jobContext, profile, extra = {}) {
-    const prompt = `You are ${profile?.name || "a candidate"} answering an employer's application question. Answer in first person, 2-4 sentences, using only facts below. If the facts do not support an answer, give a brief honest answer without inventing numbers, years or skills.
+    const inputType = extra.inputType || "textarea";
+    const styleGuide = inputType === "number"
+      ? "Return ONLY a single non-negative number (integer or decimal, no units or extra words). If unknown or no experience, return 0."
+      : inputType === "text"
+        ? "Give a concise 1-line answer (under 80 characters, plain value or short phrase, no filler)."
+        : "Answer in first person, 2-4 sentences, using only facts below.";
+    const prompt = `You are ${profile?.name || "a candidate"} answering an employer's application question. ${styleGuide} If the facts do not support an answer, give a brief honest answer without inventing numbers, years or skills.
 FACTS: ${JSON.stringify({ summary: profile?.summary, skills: profile?.skills, experience: (profile?.experience || []).map(e => ({ role: e.role, company: e.company, bullets: e.bullets })), ...extra })}
-JOB: ${String(jobContext || "").slice(0, 1200)}
+JOB: ${this._condenseJd(jobContext, 2000)}
 QUESTION: "${question}"
 Return only the answer text.`;
     try {
-      return this._plain(await this._callWithFallback(prompt, { json: false })).replace(/^["']|["']$/g, "");
+      let ans = this._plain(await this._callWithFallback(prompt, { json: false })).replace(/^["']|["']$/g, "");
+      if (inputType === "number") {
+        const m = ans.match(/\d+(?:\.\d+)?/);
+        ans = m ? m[0] : "";
+      } else if (extra.maxLength > 0 && ans.length > extra.maxLength) {
+        ans = this._clampText(ans, extra.maxLength).replace(/\.$/, "");
+      }
+      return ans;
     } catch (e) {
       return "";
     }
@@ -560,11 +617,20 @@ Return only the answer text.`;
     if (!str || typeof str !== "string") return str;
     const t = str.trim().replace(/[‐-―]/g, "-");
     if (t.replace(/\*\*/g, "").length <= maxLen) return t;
-    const sliced = t.slice(0, maxLen);
+    // Slice by visible characters so **bold** markers never get split mid-token or count against visible budget.
+    let vis = 0, rawCut = 0;
+    for (let i = 0; i < t.length; i++) {
+      if (t[i] === "*" && t[i + 1] === "*") { i++; rawCut = i + 1; continue; }
+      if (vis >= maxLen) break;
+      vis++;
+      rawCut = i + 1;
+    }
+    const sliced = t.slice(0, rawCut);
     const sp = sliced.lastIndexOf(" ");
-    let res = (sp > maxLen * 0.7 ? sliced.slice(0, sp) : sliced).replace(/[,;:\-\s]+$/, "");
+    let res = (sp > rawCut * 0.7 ? sliced.slice(0, sp) : sliced).replace(/[,;:\-\s]+$/, "");
+    res = res.replace(/\*\*$/, "").trim();
     if ((res.match(/\*\*/g) || []).length % 2) res += "**";
-    return res;
+    return res.replace(/\*\*\*\*$/, "");
   }
 
   _limitBold(str, max = 2) {
@@ -695,27 +761,93 @@ Return only the answer text.`;
     throw lastError || new Error("Groq returned an empty response.");
   }
 
+  async _geminiModels(apiKey, refresh = false) {
+    if (!refresh && AIService._gemModels && Date.now() - AIService._gemModels.at < 6 * 3600 * 1000) {
+      return AIService._gemModels.list;
+    }
+    const fallback = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+    let list = [];
+    if (apiKey) {
+      try {
+        const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=100", {
+          headers: { "x-goog-api-key": apiKey },
+          signal: AbortSignal.timeout(12000)
+        });
+        if (res.ok) {
+          const data = (await res.json()).models || [];
+          const skip = /(embedding|imagen|veo|aqa|tts|audio|robotics|bison|gecko|learnlm|computer-use|image|deep-research)/i;
+          const rank = id => {
+            if (id === "gemini-flash-latest") return 0;
+            if (/^gemini-4-hydrogen/i.test(id)) return 1;
+            if (/^gemini-2\.5-flash$/i.test(id)) return 2;
+            if (/flash-lite/i.test(id)) return 4;
+            if (/flash/i.test(id)) return 3;
+            if (/hydrogen|neon/i.test(id)) return 5;
+            if (/pro|carbon|argon/i.test(id)) return 6;
+            if (/gemma/i.test(id)) return 7;
+            return 8;
+          };
+          list = data
+            .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
+            .map(m => String(m.name || "").replace(/^models\//, ""))
+            .filter(id => id && !skip.test(id))
+            .sort((a, b) => rank(a) - rank(b) || b.localeCompare(a));
+        } else if (refresh) {
+          throw this._apiError("Gemini", res.status, await res.text(), res.headers.get("retry-after"));
+        }
+      } catch (e) {
+        if (refresh) throw e;
+      }
+    }
+    if (!list.length) return fallback;
+    // Ensure proven defaults stay available in fallback order if not already listed
+    fallback.forEach(m => { if (!list.includes(m) && m !== "gemini-flash-latest") list.push(m); });
+    AIService._gemModels = { list, at: Date.now() };
+    return list;
+  }
+
+  async listGeminiModels(apiKey, refresh = true) {
+    return this._geminiModels(apiKey, refresh);
+  }
+
   async _callGemini(prompt, apiKey, opts = {}) {
-    const models = ["gemini-flash-latest", "gemini-3.8-flash"];
+    const live = await this._geminiModels(apiKey, false);
+    const chosen = this.geminiModel && this.geminiModel !== "auto" ? [this.geminiModel] : [];
+    const models = [...new Set([...chosen, ...live])].slice(0, 4);
     let lastError = null;
     for (const model of models) {
-      const generationConfig = { temperature: 0.3, maxOutputTokens: opts.maxTokens || 3000 };
-      if (opts.json !== false) generationConfig.responseMimeType = "application/json";
-      try {
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig }),
-          signal: AbortSignal.timeout(45000)
-        });
-        if (!res.ok) {
-          const e = this._apiError("Gemini", res.status, await res.text(), res.headers.get("retry-after"));
-          if ([400, 401, 403].includes(res.status)) e.fatal = true;
-          throw e;
+      let allowJsonMime = opts.json !== false;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const generationConfig = { temperature: 0.3, maxOutputTokens: opts.maxTokens || 3000 };
+        if (allowJsonMime) generationConfig.responseMimeType = "application/json";
+        try {
+          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig }),
+            signal: AbortSignal.timeout(45000)
+          });
+          if (!res.ok) {
+            const rawBody = await res.text();
+            if (res.status === 400 && allowJsonMime && /responseMimeType|JSON mode/i.test(rawBody)) {
+              allowJsonMime = false;
+              continue;
+            }
+            const e = this._apiError("Gemini", res.status, rawBody, res.headers.get("retry-after"));
+            if ([401, 403].includes(res.status) || (res.status === 400 && /api[\s_-]?key|API_KEY_INVALID|key not valid/i.test(rawBody))) {
+              e.fatal = true;
+            }
+            throw e;
+          }
+          const text = (await res.json()).candidates?.[0]?.content?.parts?.map(p => p.text).join("");
+          if (text && text.trim()) return text;
+          break;
+        } catch (e) {
+          lastError = e;
+          break;
         }
-        const text = (await res.json()).candidates?.[0]?.content?.parts?.map(p => p.text).join("");
-        if (text && text.trim()) return text;
-      } catch (e) { lastError = e; if (e.fatal) break; }
+      }
+      if (lastError?.fatal) break;
     }
     throw lastError || new Error("Gemini returned an empty response.");
   }

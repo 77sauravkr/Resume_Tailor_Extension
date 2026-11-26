@@ -15,6 +15,6 @@ All data stays in `chrome.storage.local`. Nothing is bundled in the source.
 
 ## Notes
 - Reload job tabs that were open before installing so the content script is present.
-- Autofill attaches the resume you uploaded in Documents. Save the tailored PDF from the viewer (Print -> Save as PDF) and upload it there to use it for a specific application.
-- Custom dropdowns (React-select, some Workday widgets) are not filled and show as unsure in the completion list.
+- Resume and cover letter files (PDF / DOCX) are stored in the extension's IndexedDB. Use **Use for Autofill** in the resume viewer to set the generated 1-page tailored PDF as your active autofill file immediately (your original resume stays backed up in Documents).
+- Supports native `<select>`, custom ARIA/React-Select dropdowns, checkboxes, multiple work/education entries, shadow DOM, and embedded application iframes.
 - PDF parsing uses bundled pdf.js 3.11.174 (Apache-2.0).

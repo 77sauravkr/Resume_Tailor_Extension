@@ -1,9 +1,12 @@
-// panel.js - side panel: job card, one-click autofill, tailoring, cover letter
+// panel.js - side panel: job card, one-click autofill (including iframes), tailoring, cover letter
 
 const $ = id => document.getElementById(id);
 let job = { role: "", company: "", text: "", url: "" };
 let manualJob = null;           // user-edited job overrides detection for the current tab
 let currentTab = null;
+let lastLoadedUrl = "";
+let spaRetryTimer = null;
+let navDebounceTimer = null;
 let profile = AegisAutofillData.normalize(null);
 
 function say(msg, kind = "") {
@@ -17,23 +20,31 @@ async function activeTab() {
   return tab;
 }
 
-function rawSend(tabId, msg) {
+function rawSend(tabId, msg, opts = undefined) {
   return new Promise(resolve => {
-    chrome.tabs.sendMessage(tabId, msg, res => resolve(chrome.runtime.lastError ? null : res));
+    const cb = res => resolve(chrome.runtime.lastError ? null : res);
+    if (opts) chrome.tabs.sendMessage(tabId, msg, opts, cb);
+    else chrome.tabs.sendMessage(tabId, msg, cb);
   });
 }
 
-// Tabs opened before the extension was installed/reloaded have no content script: inject it and retry.
-async function sendToTab(tabId, msg) {
-  let res = await rawSend(tabId, msg);
-  if (res) return res;
+async function ensureContentScripts(tabId, allFrames = false) {
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["autofill-data.js", "autofill-engine.js", "content.js"] });
-    await chrome.scripting.insertCSS({ target: { tabId }, files: ["content.css"] });
+    await chrome.scripting.executeScript({ target: { tabId, allFrames }, files: ["autofill-data.js", "autofill-engine.js", "content.js"] });
+    await chrome.scripting.insertCSS({ target: { tabId, allFrames }, files: ["content.css"] });
+    return true;
   } catch (e) {
-    return null;   // chrome:// pages, web store, etc.
+    return false;   // chrome:// pages, web store, etc.
   }
-  return rawSend(tabId, msg);
+}
+
+// Tabs opened before the extension was installed/reloaded have no content script: inject it and retry.
+async function sendToTab(tabId, msg, frameId = undefined) {
+  const opts = frameId !== undefined ? { frameId } : undefined;
+  let res = await rawSend(tabId, msg, opts);
+  if (res) return res;
+  if (!(await ensureContentScripts(tabId, true))) return null;
+  return rawSend(tabId, msg, opts);
 }
 
 // ---------- Profile / rows ----------
@@ -56,16 +67,37 @@ async function loadProfile() {
 let excluded = new Set();      // gap keywords the user tapped off
 
 async function loadJob(force = false) {
+  clearTimeout(spaRetryTimer);
   currentTab = await activeTab();
+  const nextUrl = currentTab?.url || "";
+  if (nextUrl !== lastLoadedUrl) {
+    $("completion").hidden = true;
+    say("");
+    lastLoadedUrl = nextUrl;
+  }
   if (manualJob && manualJob.tabUrl === currentTab?.url) { job = manualJob; return renderJob(); }
   manualJob = null;
-  job = { role: "", company: "", text: "", url: currentTab?.url || "" };
+  const prevSig = `${job.role}|${job.company}|${job.text.slice(0, 80)}`;
+  job = { role: "", company: "", text: "", url: nextUrl };
   if (currentTab?.id) {
     const res = await sendToTab(currentTab.id, { action: "GET_JOB_DETAILS", force });
-    if (res?.success) job = { ...res.data, url: res.data.url || currentTab.url };
+    if (res?.success) job = { ...res.data, url: res.data.url || nextUrl };
   }
   excluded = new Set();
   renderJob();
+
+  // SPAs (LinkedIn/Workday) often finish updating the JD pane shortly after route change
+  const newSig = `${job.role}|${job.company}|${job.text.slice(0, 80)}`;
+  if (force && currentTab?.id && (job.text.length < 150 || newSig === prevSig)) {
+    spaRetryTimer = setTimeout(async () => {
+      if (manualJob || !currentTab?.id) return;
+      const retry = await sendToTab(currentTab.id, { action: "GET_JOB_DETAILS", force: true });
+      if (retry?.success && retry.data.text && retry.data.text !== job.text) {
+        job = { ...retry.data, url: retry.data.url || currentTab.url };
+        renderJob();
+      }
+    }, 1200);
+  }
 }
 
 function renderJob() {
@@ -92,9 +124,17 @@ $("btn-rescan").onclick = () => { manualJob = null; loadJob(true); };
 
 let scan = null, scanSeq = 0;
 
-function setScores(before) {
+function setScores(before, projected = null) {
   $("score-before").textContent = before;
-  $("after-box").hidden = true; $("score-arrow").hidden = true;   // the after-score only appears once a resume is really tailored
+  if (projected !== null) {
+    $("score-after").textContent = projected + "%";
+    $("after-label").textContent = "Projected";
+    $("after-box").hidden = false;
+    $("score-arrow").hidden = false;
+  } else {
+    $("after-box").hidden = true;
+    $("score-arrow").hidden = true;
+  }
 }
 
 function renderMatch() {
@@ -111,7 +151,7 @@ function renderMatch() {
   runScan();
 }
 
-// Scans on every popup open / job change: the AI compares the real resume text to this job.
+// Scans on every panel open / job change: the AI compares the real resume text to this job.
 async function runScan() {
   const seq = ++scanSeq;
   $("kw-wrap").hidden = true; $("kw-empty").hidden = false;
@@ -163,6 +203,7 @@ function applyMode(res = scan) {
   $("mode-note").textContent = !res.gaps.length ? "" : tailorMode() === "all"
     ? `All adds all ${res.gaps.length} gaps, including ${miss} hard ones with no evidence.`
     : `Safe adds ${rel} backed + ${quick} quick-to-learn gaps. Skips ${miss} hard ones.${src}`;
+  updateScores();
 }
 document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener("change", () => applyMode()));
 
@@ -170,7 +211,10 @@ function selectedGaps() { return scan ? scan.gaps.map(g => g.term).filter(k => !
 
 function updateScores() {
   if (!scan) return;
-  setScores(scan.score + "%");
+  const total = scan.matched.length + scan.gaps.length;
+  const addCount = selectedGaps().length;
+  const projected = (total > 0 && addCount > 0) ? Math.min(100, Math.round(100 * (scan.matched.length + addCount) / total)) : null;
+  setScores(scan.score + "%", projected);
 }
 
 $("gap-chips").addEventListener("click", e => {
@@ -184,33 +228,87 @@ $("gap-chips").addEventListener("click", e => {
 
 const escHtml = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-// ---------- Autofill + completion ----------
+// ---------- Autofill + completion (across top frame & embedded iframes) ----------
 function renderCompletion(res) {
   $("completion").hidden = false;
   $("completion-pct").textContent = res.percent + "%";
   $("completion-bar").style.width = res.percent + "%";
   const req = res.items.filter(i => i.required), opt = res.items.filter(i => !i.required);
-  const row = i => `<div class="item ${i.filled ? "ok" : "no"}" data-id="${i.id}"><span class="mark">${i.filled ? "✓" : "–"}</span>${i.label.replace(/[<>&]/g, "")}</div>`;
+  const row = i => `<div class="item ${i.filled ? "ok" : "no"}" data-id="${i.id}" data-frame="${i.frameId ?? 0}"><span class="mark">${i.filled ? "✓" : "–"}</span>${i.label.replace(/[<>&]/g, "")}</div>`;
   $("completion-body").innerHTML =
     (req.length ? `<div class="sec">Required (${res.requiredFilled}/${req.length})</div>${req.map(row).join("")}` : "") +
     (opt.length ? `<div class="sec">Optional</div>${opt.map(row).join("")}` : "") +
     (res.items.length ? `<div class="muted" style="margin-top:8px">– means unsure. Click a field to find it on the page.</div>` : `<div class="muted">No fillable fields found on this page.</div>`);
 }
 
-$("completion-body").addEventListener("click", e => {
+$("completion-body").addEventListener("click", async e => {
   const item = e.target.closest(".item");
-  if (item && currentTab?.id) sendToTab(currentTab.id, { action: "LOCATE_FIELD", id: +item.dataset.id });
+  if (!item || !currentTab?.id) return;
+  const frameId = Number(item.dataset.frame || 0);
+  const id = +item.dataset.id;
+  const res = await sendToTab(currentTab.id, { action: "LOCATE_FIELD", id }, frameId);
+  if (!res?.success) {
+    chrome.scripting.executeScript({
+      target: { tabId: currentTab.id, frameIds: [frameId] },
+      func: fieldId => window.__aegisLocateField?.(fieldId),
+      args: [id]
+    }).catch(() => {});
+  }
 });
 $("completion-toggle").onclick = () => { $("completion-body").hidden = !$("completion-body").hidden; };
+
+async function runAutofillAcrossFrames(tabId, jobContext) {
+  const runInFrames = () => chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    func: ctx => (typeof window.__aegisRunAutofill === "function" ? window.__aegisRunAutofill(ctx) : { __missing: true }),
+    args: [jobContext || ""]
+  });
+
+  let results;
+  try {
+    results = await runInFrames();
+  } catch (e) {
+    return null;
+  }
+
+  if (results.some(r => r.result?.__missing)) {
+    const ok = await ensureContentScripts(tabId, true);
+    if (!ok) return null;
+    results = await runInFrames().catch(() => null);
+    if (!results) return null;
+  }
+
+  const allItems = [];
+  let filled = 0, total = 0, required = 0, requiredFilled = 0;
+  for (const r of results) {
+    const res = r.result;
+    if (!res || res.__missing) continue;
+    filled += res.filled || 0;
+    total += res.total || 0;
+    required += res.required || 0;
+    requiredFilled += res.requiredFilled || 0;
+    (res.items || []).forEach(it => allItems.push({ ...it, frameId: r.frameId }));
+  }
+  return {
+    success: true,
+    filled,
+    total,
+    required,
+    requiredFilled,
+    percent: required ? Math.round(100 * requiredFilled / required) : 100,
+    items: allItems
+  };
+}
 
 $("btn-autofill").onclick = async () => {
   if (AegisAutofillData.isEmpty(profile)) { say("Import your resume or fill your information first.", "err"); return; }
   const tab = await activeTab();
   if (!tab?.id) return;
+  currentTab = tab;
   const btn = $("btn-autofill");
   btn.disabled = true; btn.textContent = "Filling…";
   say("");
-  const res = await sendToTab(tab.id, { action: "EXECUTE_AUTOFILL" });
+  const res = await runAutofillAcrossFrames(tab.id, job.text);
   btn.disabled = false; btn.textContent = "Autofill";
   if (!res?.success) { say("Could not reach this page. Reload the tab and try again.", "err"); return; }
   renderCompletion(res);
@@ -275,8 +373,22 @@ $("btn-another").onclick = () => { $("completion").hidden = true; say(""); manua
 
 // ---------- Live updates ----------
 chrome.tabs.onActivated.addListener(() => loadJob());
-chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === "complete" && currentTab?.id === id) loadJob(); });
-chrome.storage.onChanged.addListener((c, area) => { if (area === "local" && c.autofillProfile) loadProfile().then(renderMatch); });
+chrome.windows?.onFocusChanged?.addListener(winId => {
+  if (winId !== chrome.windows.WINDOW_ID_NONE) loadJob();
+});
+chrome.tabs.onUpdated.addListener((id, info) => {
+  if (currentTab?.id !== id) return;
+  if (info.url) {
+    clearTimeout(navDebounceTimer);
+    navDebounceTimer = setTimeout(() => loadJob(true), 650);
+  } else if (info.status === "complete") {
+    clearTimeout(navDebounceTimer);
+    loadJob(true);
+  }
+});
+chrome.storage.onChanged.addListener((c, area) => {
+  if (area === "local" && (c.autofillProfile || c.aiConfig)) loadProfile().then(renderMatch);
+});
 
 (async function init() {
   await loadProfile();
