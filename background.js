@@ -23,6 +23,15 @@ async function load() {
   return { profile, resume: AegisAutofillData.toResumeProfile(profile), ai: new AIService(aiConfig), aiConfig };
 }
 
+// Questions about this company or role get a separate answer per job; factual ones are reused everywhere.
+const JOB_SPECIFIC_RE = /why|company|role|position|\bour\b|\bus\b|\bwe\b|\bthis\b|know about|interest|excite|motivat|team|product|mission|opportunit|cover/i;
+
+function answerKey(question, jobContext, facts) {
+  const q = String(question || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const text = [q, JOB_SPECIFIC_RE.test(q) ? String(jobContext || "") : "", JSON.stringify(facts)].join("|");
+  return "a:" + [...text].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) | 0, 7);
+}
+
 const handlers = {
   async OPEN_EDITOR(m) {
     const q = new URLSearchParams();
@@ -39,7 +48,7 @@ const handlers = {
     const store = await chrome.storage.local.get("scanCache");
     const cache = store.scanCache || {};
     if (cache[key]) return { success: true, ...cache[key].res };
-    const res = await ai.scanJobFit(text, resume);
+    const res = await ai.scanJobFit(text, resume, { useAi: !!m.useAi });
     if (res.source === "ai") {   // only cache real AI results
       cache[key] = { res, at: Date.now() };
       const keep = Object.entries(cache).sort((a, b) => b[1].at - a[1].at).slice(0, 15);
@@ -90,14 +99,23 @@ const handlers = {
   async ANSWER_QUESTION(m) {
     const { resume, ai, profile } = await load();
     if (!ai.hasKey) return { success: true, answer: "" };
-    const answer = await ai.answerScreeningQuestion(m.question, m.jobContext, resume, {
+    const extra = {
       noticePeriod: profile.preferences.noticePeriod,
       expectedSalary: profile.preferences.salary,
       currentSalary: profile.preferences.currentCtc,
       location: [profile.personal.city, profile.personal.country].filter(Boolean).join(", "),
       inputType: m.inputType || "textarea",
       maxLength: m.maxLength || 0
-    });
+    };
+    const key = answerKey(m.question, m.jobContext, [ai._profileText(resume), extra]);
+    const cache = (await chrome.storage.local.get("answerCache")).answerCache || {};
+    if (cache[key]) return { success: true, answer: cache[key].answer };
+    const answer = await ai.answerScreeningQuestion(m.question, m.jobContext, resume, extra);
+    if (answer) {
+      const latest = (await chrome.storage.local.get("answerCache")).answerCache || {};
+      latest[key] = { answer, at: Date.now() };
+      await chrome.storage.local.set({ answerCache: Object.fromEntries(Object.entries(latest).sort((a, b) => b[1].at - a[1].at).slice(0, 100)) });
+    }
     return { success: true, answer };
   },
 
